@@ -27,7 +27,10 @@ import os
 import time
 import urllib.parse
 import urllib.request
+
 from dataclasses import dataclass
+
+from . import tls
 
 FABRIC_AUDIENCE = "https://api.fabric.microsoft.com"
 STORAGE_AUDIENCE = "https://storage.azure.com"
@@ -100,7 +103,7 @@ class Target:
         req = urllib.request.Request(
             self.token_url, data=body,
             headers={"Content-Type": "application/x-www-form-urlencoded"})
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=tls.CONTEXT) as r:
             payload = json.loads(r.read())
         tok = payload["access_token"]
         cache[audience] = (tok, time.time() + int(payload.get("expires_in", 3600)))
@@ -118,6 +121,12 @@ class Target:
         `azure_storage_token` is the bearer, which is precisely the field dlt's
         own credential model does not have — see pyproject.toml for why that
         decided the architecture.
+
+        The emulator serves TLS with a self-signed cert. object_store has no
+        CA-bundle option, so invalid certificates are allowed HERE and only
+        here — a narrow, named exception rather than turning verification off
+        for the process, which would also silence a real failure against real
+        Fabric.
         """
         opts = {
             "azure_storage_account_name": "onelake",
@@ -125,7 +134,7 @@ class Target:
         }
         if self.is_emulator:
             opts["azure_endpoint"] = f"{self.onelake_url}/onelake"
-            opts["azure_allow_http"] = "true"
+            opts["azure_allow_invalid_certificates"] = "true"
         return opts
 
     @property

@@ -137,7 +137,26 @@ def contoso_daily():
         from contoso_airflow import bronze
         from contoso_airflow.target import Target
 
+        import os
+
         target = Target.from_connection("fabric")
+        # Where statements go. The platform supplies it; silver cannot resolve
+        # `source()` against tables the engine was never told about, so this is
+        # not optional decoration.
+        # REQUIRED, not optional. Silver resolves `source()` by name, and a
+        # bronze table the engine was never told about does not exist to dbt.
+        # This used to be `.get(...)` and the platform did not set it, so
+        # registration was skipped SILENTLY and the DAG reported success on a
+        # catalog that stayed empty -- the failure only visible three steps
+        # later, as eight simultaneous model errors blamed on the SQL.
+        try:
+            agent_url = os.environ["FABRIC_SPARK_AGENT_URL"]
+        except KeyError:
+            raise RuntimeError(
+                "FABRIC_SPARK_AGENT_URL is not set, so bronze cannot be "
+                "registered with the engine's catalog and every silver model "
+                "would fail to resolve its source. The platform supplies it."
+            ) from None
         vendor = next(v for v in VENDORS if v["name"] == landed["vendor"])
         out = {}
         for feed, table in vendor["tables"].items():
@@ -145,7 +164,8 @@ def contoso_daily():
             if not parts:
                 raise ValueError(f"{landed['vendor']}: nothing landed for feed {feed!r}")
             out[table] = bronze.build_table(
-                target, ctx["workspace"], ctx["lakehouse"], parts, table)
+                target, ctx["workspace"], ctx["lakehouse"], parts, table,
+                agent_url=agent_url)
         return {"vendor": landed["vendor"], "tables": out}
 
     @task(outlets=[Asset("contoso://bronze")])

@@ -1,0 +1,22 @@
+version: 2
+
+# Bronze, as this product names it. The sibling calls POS's tables
+# `bronze_customers` / `bronze_orders` because POS is "the" source system there;
+# this product prefixes every vendor, so the mapping lives here rather than in
+# each model. Renaming bronze to match would have invalidated a verification
+# already done against these names.
+sources:
+  - name: bronze
+    # `default`, not `dbo`. The bronze tables are registered into the engine's
+    # default catalog schema (SHOW TABLES reports them there); `dbo` is the
+    # Warehouse's convention and resolves to nothing here.
+    schema: "{{ env_var('CONTOSO_BRONZE_SCHEMA', 'default') }}"
+    tables:
+      - name: bronze_pos_customers
+      - name: bronze_pos_orders
+      - name: bronze_web_customers
+      - name: bronze_web_orders
+      - name: bronze_web_products
+      - name: bronze_ref_product_hierarchy
+      - name: bronze_ref_fx_rates
+      - name: bronze_erp_customer_changes

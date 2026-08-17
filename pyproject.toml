@@ -23,6 +23,20 @@ dependencies = [
     # Debezium produced -- the alternative, reading the ERP table directly,
     # would be a snapshot and not a change stream at all.
     "kafka-python>=2.0.2,<3",
+    # SILVER lands in the Lakehouse over Livy; GOLD lands in the Warehouse over
+    # TDS. Two adapters because they are two surfaces, and both are already
+    # witnessed against this emulator by its own e2e suites.
+    "dbt-core>=1.9,<2",
+    "dbt-fabricspark>=1.9,<2",
+    "dbt-fabric>=1.9,<2",
+    # Renders a dbt project as one Airflow task per model, with dbt's own graph
+    # as the dependencies -- which is what puts bronze -> silver -> gold in the
+    # UI as real edges and lets one model retry alone.
+    "astronomer-cosmos>=1.15,<2",
+    # GOLD'S MODELS COME FROM HERE, not from this repo. That package exists so
+    # the gold project is not copied per platform; depending on it is the whole
+    # point of it being a package.
+    "contoso-data-product",
 ]
 
 [project.optional-dependencies]
@@ -38,3 +52,15 @@ packages = ["src/contoso_airflow"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.uv.sources]
+# BY GIT TAG, not by sibling path. A path dependency resolves only from a
+# checkout that happens to have both repos side by side -- the worker image
+# receives this product's directory and nothing else, so `../contoso-data-product`
+# is `Distribution not found` at build time. It would also make the platform
+# product-specific: to support it, the platform's Dockerfile would have to know
+# which siblings to copy.
+#
+# A tag is what production would pin regardless, so this is the honest form
+# rather than a workaround for the container.
+contoso-data-product = { git = "https://github.com/calvinchengx/contoso-data-product.git", tag = "v0.1.0" }

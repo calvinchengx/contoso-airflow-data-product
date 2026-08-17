@@ -14,6 +14,8 @@ import json
 import urllib.error
 import urllib.request
 
+
+from . import tls
 from .target import Target
 
 
@@ -24,7 +26,7 @@ def _api(target: Target, method: str, path: str, body: dict | None = None):
     if data:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=120, context=tls.CONTEXT) as r:
             raw = r.read()
             return r.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as e:

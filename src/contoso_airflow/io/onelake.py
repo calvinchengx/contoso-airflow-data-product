@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .. import tls
 from ..target import Target
 
 # Chunked because that is how a real ADLS client writes a large export, and
@@ -44,7 +45,7 @@ def _request(target: Target, method: str, url: str, tok: str,
     if target.onelake_host_header:
         req.add_header("Host", target.onelake_host_header)
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
+        with urllib.request.urlopen(req, timeout=300, context=tls.CONTEXT) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         raise OneLakeError(

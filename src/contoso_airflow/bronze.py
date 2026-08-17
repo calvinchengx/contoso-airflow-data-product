@@ -28,6 +28,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from deltalake import DeltaTable, write_deltalake
 
+from . import catalog
 from .io import onelake
 from .target import Target
 
@@ -57,8 +58,17 @@ def _parse(blob: bytes, ext: str) -> list[dict]:
 
 
 def build_table(target: Target, workspace: str, lakehouse: str,
-                manifest: list[dict], table: str) -> dict:
-    """Read the landed parts back, parse them, write one bronze Delta table."""
+                manifest: list[dict], table: str,
+                agent_url: str) -> dict:
+    """Read the landed parts back, parse them, write one bronze Delta table.
+
+    Registers the result with the engine's catalog. `agent_url` is required
+    rather than optional: an unregistered bronze table is invisible to dbt, and
+    a default of None made that a silent skip.
+    Writing the bytes is not enough: delta-rs puts a real Delta table at
+    `Tables/<name>` and the engine still answers TABLE_OR_VIEW_NOT_FOUND for
+    the NAME, which is how dbt resolves `source()`. See catalog.py.
+    """
     rows: list[dict] = []
     for part in manifest:
         rel = part["path"]
@@ -84,5 +94,12 @@ def build_table(target: Target, workspace: str, lakehouse: str,
     landed_rows = dt.to_pyarrow_table().num_rows
     if landed_rows != len(rows):
         raise ValueError(f"{table}: wrote {len(rows)} rows, delta-rs reads {landed_rows}")
-    return {"table": table, "rows": landed_rows, "version": dt.version(),
-            "parts": len(manifest)}
+
+    out = {"table": table, "rows": landed_rows, "version": dt.version(),
+           "parts": len(manifest)}
+    # AFTER the write and after it is confirmed. Registering a path that does
+    # not hold a valid table yet would make the catalog assert something
+    # untrue, and the failure would surface in silver rather than here.
+    out["registered"] = catalog.register(
+        target, agent_url, workspace, lakehouse, table)
+    return out

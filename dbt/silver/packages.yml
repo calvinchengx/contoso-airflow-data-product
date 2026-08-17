@@ -1,0 +1,5 @@
+# dbt_utils, for `accepted_range` in schema.yml. Pinned: a test package that
+# floats can change what "passing" means between runs.
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.3.0", "<2.0.0"]

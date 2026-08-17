@@ -1,0 +1,23 @@
+# Gold materialises into the WAREHOUSE, over TDS.
+#
+# THE MODELS ARE NOT HERE. `contoso-data-product` ships the gold project -- 9
+# models, 27 tests, 4 dialect macros -- and exists precisely so gold is not
+# copied: "two fct_sales.sql files agree until the day someone fixes a bug in
+# one of them". This product supplies the PROFILE and points dbt at
+# `gold_dir()`; a second copy of the SQL would make compare_products.py compare
+# two different definitions and call it agreement.
+contoso_gold:
+  target: dev
+  outputs:
+    dev:
+      type: fabric
+      driver: "{{ env_var('DBT_ODBC_DRIVER', 'ODBC Driver 18 for SQL Server') }}"
+      server: "{{ env_var('DBT_HOST') }}"
+      port: "{{ env_var('DBT_PORT') | int }}"
+      database: "{{ env_var('DBT_DATABASE') }}"
+      schema: dbo
+      authentication: "ActiveDirectoryAccessToken"
+      access_token: "{{ env_var('DBT_ACCESS_TOKEN') }}"
+      encrypt: false
+      trust_cert: true
+      threads: 1

@@ -1,0 +1,53 @@
+version: 2
+
+# The tests ARE the contract. `contracts.py` derives ODCS identities from this
+# file rather than restating the columns, so quality is defined once and
+# published to the catalog -- not typed a second time for governance.
+models:
+  - name: silver_customers
+    description: "POS customers, deduplicated to one row per customer_id and conformed."
+    columns:
+      - name: customer_id
+        description: "POS's own identifier. Unique here, NOT in bronze."
+        tests: [unique, not_null]
+      - name: country
+        description: "Country after variant conforming; never null."
+        tests: [not_null]
+
+  - name: silver_orders
+    description: "POS orders, latest event per order, unusable rows quarantined."
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: amount
+        description: "quantity * unit_price at MONEY precision."
+        tests: [not_null]
+      - name: quantity
+        tests:
+          # The quarantine predicate, asserted from the other side. If a
+          # non-positive quantity reaches silver_orders, the split leaked.
+          - dbt_utils.accepted_range:
+              min_value: 1
+              inclusive: true
+
+  - name: silver_party
+    description: "One row per resolved person across POS and Web."
+    columns:
+      - name: party_key
+        description: "email:<address>, or pos:<id> when the vendor gave no email."
+        tests: [unique, not_null]
+
+  - name: silver_fx_daily
+    description: "Dense daily FX, carrying the last quote forward across non-quoted days."
+    columns:
+      - name: rate_to_usd
+        tests: [not_null]
+      - name: rate_is_carried
+        description: "True when this day had no quote of its own."
+        tests: [not_null]
+
+  - name: silver_web_order_lines
+    description: "Web orders flattened to one row per line."
+    columns:
+      - name: amount
+        tests: [not_null]

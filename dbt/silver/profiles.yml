@@ -1,0 +1,32 @@
+# Silver materialises into the LAKEHOUSE, over Livy.
+#
+# The Airflow worker holds no Spark session: dbt-fabricspark submits statements
+# to the emulator's Livy surface, the emulator drives its statement agent, and
+# Sail executes. Every value here is env-driven, so production points the same
+# profile at real Fabric and no model changes.
+contoso_silver:
+  target: dev
+  outputs:
+    dev:
+      type: fabricspark
+      method: livy
+      livy_mode: fabric
+      # `int_tests` is the adapter's own name for "the caller supplies a bearer",
+      # which is exactly the seam this product uses everywhere else: the token is
+      # minted from the target's credential and this file never learns whose.
+      authentication: int_tests
+      accessToken: "{{ env_var('DBT_ACCESS_TOKEN') }}"
+      endpoint: "{{ env_var('DBT_FABRIC_ENDPOINT') }}"
+      workspaceid: "{{ env_var('DBT_WORKSPACE_ID') }}"
+      lakehouseid: "{{ env_var('DBT_LAKEHOUSE_ID') }}"
+      lakehouse: "{{ env_var('DBT_LAKEHOUSE_NAME', 'lake') }}"
+      schema: "{{ env_var('DBT_LAKEHOUSE_NAME', 'lake') }}"
+      threads: 1
+      connect_retries: 3
+      connect_timeout: 30
+      # REQUIRED by the adapter -- `name` inside spark_config, not at the top
+      # level. Its absence is a bare `ValueError: Missing required key: name`
+      # from deep in credential parsing, which says nothing about where it
+      # belongs. It names the Livy session the emulator creates.
+      spark_config:
+        name: "contoso-silver"
