@@ -1,0 +1,36 @@
+[project]
+name = "contoso-airflow-data-product"
+version = "0.1.0"
+description = "The Contoso data product for Apache Airflow 3: dlt sources, dbt models, ODCS contracts."
+requires-python = ">=3.12"
+authors = [{name = "Calvin Cheng", email = "calvin@calvinx.com"}]
+
+# WHAT THE WORKER MUST IMPORT. The platform installs exactly this with
+# `uv pip install -r pyproject.toml`; there is no requirements.txt anywhere.
+#
+# Deliberately NOT here: dlt's Azure extras (dlt[filesystem], dlt[deltalake],
+# dlt[fabric]). Phase 0 measured all three against the emulator and all three
+# failed the same way -- dlt's credential model carries account-key, SAS and
+# service-principal shapes and has NO bearer field, so a raw storage_options
+# dict is unrecognised and dlt falls through to DefaultAzureCredential. Left
+# unisolated it reached real Microsoft endpoints. dlt extracts; delta-rs and
+# stdlib HTTP write. Neither needs an Azure SDK.
+dependencies = [
+    "dlt==1.30.0",
+    "deltalake>=0.23,<2",
+    "pyarrow>=18,<24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "ruff>=0.14,<0.16"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/contoso_airflow"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
