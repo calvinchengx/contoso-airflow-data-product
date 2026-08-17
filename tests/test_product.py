@@ -125,3 +125,59 @@ def test_a_delete_keeps_its_identity_from_before():
                                   "before": {"erp_customer_id": 9}, "after": None}})
     rows = bronze._parse(env.encode() + b"\n", "cdc")
     assert rows == [{"erp_customer_id": 9, "__op": "d", "__ts_ms": 2}]
+
+
+def test_the_product_names_no_deployment_it_could_be_pointed_at():
+    """No hostname, port or filesystem path belonging to one deployment.
+
+    THE RULE IS THE DELIVERABLE, not a preference: this repo has to deploy to a
+    managed Airflow against real Fabric unedited. Every literal here was found
+    in it once. Each was a DEFAULT, which is what made them dangerous -- a
+    deployment that failed to set the variable did not fail, it silently aimed
+    at a container name that exists on one machine in the world.
+
+    Comments are exempt: they explain where a value comes from, and one that
+    names the local stack while the code takes it from a connection is
+    documentation, not coupling.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1]
+    banned = ["fabric-emulator", "entra-emulator", "spark-agent", ":9443",
+              "/home/airflow", "localhost", "127.0.0.1"]
+
+    def docstring_lines(source: str) -> set[int]:
+        """Line numbers belonging to a docstring, and only a docstring.
+
+        Comments and docstrings are prose; a string literal anywhere else is a
+        VALUE, and a value is exactly what this test exists to catch -- so the
+        exemption is found structurally rather than by skipping every quoted
+        string, which would exempt the defaults that caused the problem.
+        """
+        import ast
+
+        exempt = set()
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                     ast.AsyncFunctionDef)):
+                continue
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                exempt.update(range(body[0].lineno, body[0].end_lineno + 1))
+        return exempt
+
+    offenders = []
+    for path in [*root.glob("dags/*.py"), *root.glob("src/**/*.py"),
+                 *root.glob("dbt/**/*.yml")]:
+        source = path.read_text()
+        exempt = docstring_lines(source) if path.suffix == ".py" else set()
+        for n, line in enumerate(source.splitlines(), 1):
+            if n in exempt:
+                continue
+            code = line.split("#", 1)[0]
+            for literal in banned:
+                if literal in code:
+                    offenders.append(f"{path.relative_to(root)}:{n} {literal}")
+    assert not offenders, (
+        "these name one deployment and must come from a Connection or the "
+        f"environment instead: {offenders}")

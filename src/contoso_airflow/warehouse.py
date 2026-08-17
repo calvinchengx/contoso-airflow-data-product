@@ -19,9 +19,13 @@ no-op that returns the same list.
 """
 from __future__ import annotations
 
+import json
 import struct
 import time
+import urllib.error
+import urllib.request
 
+from . import tls
 from .target import Target
 
 # SQL_COPT_SS_ACCESS_TOKEN -- the ODBC attribute Fabric's Entra auth goes
@@ -33,6 +37,29 @@ SQL_COPT_SS_ACCESS_TOKEN = 1256
 
 class ReflectionError(RuntimeError):
     """Silver is not visible through the SQL analytics endpoint."""
+
+
+def endpoint(conn_id: str = "fabric_warehouse") -> tuple[str, str]:
+    """Where TDS is, from the connection the deployment provisions.
+
+    NO DEFAULT, deliberately. This used to be
+    `os.environ.get("FABRIC_TDS_HOST", "fabric-emulator")`, which names a
+    local container inside product code -- so a deployment that forgot to set
+    the variable would not fail, it would quietly aim at a hostname that
+    exists on one machine in the world. An unprovisioned connection raises
+    here instead, before a token is minted or a model is built.
+
+    The platform already provisions this connection with exactly these two
+    fields; this reads them rather than re-deriving them.
+    """
+    from airflow.sdk import BaseHook
+
+    conn = BaseHook.get_connection(conn_id)
+    if not conn.host:
+        raise ReflectionError(
+            f"connection {conn_id!r} names no host; the deployment must "
+            f"provision it with the Warehouse's TDS endpoint.")
+    return conn.host, str(conn.port or 1433)
 
 
 def _attrs(token: str) -> dict:
@@ -69,22 +96,71 @@ def tables(conn) -> set[str]:
     return {f"{r[0]}.{r[1]}" for r in rows}
 
 
-def reflect(target: Target, lakehouse_id: str, host: str, port: str,
-            expect: list[str], schema: str = "dbo") -> dict:
-    """Connect to the lakehouse endpoint and confirm every expected table.
+def refresh_metadata(target: Target, workspace_id: str, lakehouse_id: str) -> list:
+    """Tell the SQL analytics endpoint to catch up with Delta.
+
+    ASKING IS NOT THE SAME AS CONNECTING, and the difference is a silent
+    no-op. The endpoint's view of the Lakehouse is a snapshot; tables written
+    after it was taken are invisible until it is refreshed. Opening a
+    connection happens to trigger that refresh on some implementations, which
+    makes "just connect again" look like it works -- and does nothing at all
+    against a real tenant, where the only lever is this call.
+
+    Measured, before this existed: eight silver models built and landed in
+    OneLake, and the endpoint exposed three of them. Not a write problem --
+    a metadata problem that a connection-based re-sync could not fix.
+
+    The endpoint's id comes from the lakehouse itself
+    (`properties.sqlEndpointProperties.id`), which is where real Fabric puts
+    it, so nothing here is target-specific.
+    """
+    lake = _api(target, "GET", f"/v1/workspaces/{workspace_id}/lakehouses/{lakehouse_id}")
+    endpoint = (lake.get("properties", {})
+                    .get("sqlEndpointProperties", {})
+                    .get("id"))
+    if not endpoint:
+        raise ReflectionError(
+            f"lakehouse {lakehouse_id} reports no SQL analytics endpoint; "
+            f"gold has nothing to read silver through.")
+    report = _api(target, "POST",
+                  f"/v1/workspaces/{workspace_id}/sqlEndpoints/{endpoint}"
+                  f"/refreshMetadata")
+    return (report or {}).get("value", [])
+
+
+def _api(target: Target, method: str, path: str) -> dict:
+    req = urllib.request.Request(f"{target.api_root}{path}", method=method)
+    req.add_header("Authorization", f"Bearer {target.fabric_token()}")
+    try:
+        with urllib.request.urlopen(req, timeout=300, context=tls.CONTEXT) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        raise ReflectionError(
+            f"{method} {path} -> {e.code}: {e.read()[:200]!r}") from e
+
+
+def reflect(target: Target, workspace_id: str, lakehouse_id: str, host: str,
+            port: str, expect: list[str], schema: str = "dbo") -> dict:
+    """Refresh the endpoint, then confirm every expected table.
 
     Returns a row count per table -- numbers, not a status. A count is the only
     version of this check that cannot pass on an empty table.
     """
+    synced = refresh_metadata(target, workspace_id, lakehouse_id)
+    print(f"sql endpoint: refreshMetadata reported {len(synced)} table(s)", flush=True)
     conn = connect(target, lakehouse_id, host, port)
     present = tables(conn)
     missing = [t for t in expect if f"{schema}.{t}" not in present]
     if missing:
         raise ReflectionError(
-            f"the SQL analytics endpoint does not expose {missing}. "
-            f"It sees {sorted(present)}. A silver table written WITHOUT an "
-            f"explicit LOCATION under the lakehouse's Tables/ is real in the "
-            f"Spark catalog and invisible here -- check location_root.")
+            f"the SQL analytics endpoint does not expose {missing} even after "
+            f"refreshMetadata reported {len(synced)} table(s). It sees "
+            f"{sorted(present)}. Two things put a silver table here and not "
+            f"there: it was written WITHOUT an explicit LOCATION under the "
+            f"lakehouse's Tables/ (check location_root -- such a table is real "
+            f"in the Spark catalog and invisible to this endpoint), or its "
+            f"Delta log is not readable from the endpoint's side.")
     counts = {}
     for t in expect:
         counts[t] = conn.cursor().execute(

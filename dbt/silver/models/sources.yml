@@ -7,10 +7,22 @@ version: 2
 # already done against these names.
 sources:
   - name: bronze
-    # `default`, not `dbo`. The bronze tables are registered into the engine's
-    # default catalog schema (SHOW TABLES reports them there); `dbo` is the
-    # Warehouse's convention and resolves to nothing here.
-    schema: "{{ env_var('CONTOSO_BRONZE_SCHEMA', 'default') }}"
+    # THE LAKEHOUSE'S OWN SCHEMA, which is where a Lakehouse's tables are.
+    #
+    # This said `default` and was propped up by the product registering every
+    # bronze table into the engine's session catalog on each run. Measured
+    # against a COLD engine, with no registration at all:
+    #
+    #     lake.bronze_pos_customers      -> 102,000
+    #     default.bronze_pos_customers   -> TABLE_OR_VIEW_NOT_FOUND
+    #
+    # A Lakehouse's Tables/ are discovered into a schema named after the
+    # lakehouse -- on real Fabric and here -- and it is the same name this
+    # project's own profile already writes silver into. `default` was a name
+    # only the product's own registration created, so depending on it meant
+    # carrying that step forever. `dbo` is the Warehouse's convention and
+    # resolves to nothing on this side.
+    schema: "{{ env_var('DBT_LAKEHOUSE_NAME', 'lake') }}"
     tables:
       - name: bronze_pos_customers
       - name: bronze_pos_orders

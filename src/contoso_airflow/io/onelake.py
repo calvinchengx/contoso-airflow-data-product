@@ -56,6 +56,21 @@ def _url(target: Target, workspace: str, item: str, rel: str, query: str = "") -
     return f"{target.onelake_url}/{workspace}/{item}/{urllib.parse.quote(rel)}{query}"
 
 
+def tables_root(workspace: str, lakehouse: str) -> str:
+    """`Tables/` in OneLake -- where a Lakehouse's tables ARE.
+
+    Not a convention this product invented. A Delta directory under `Tables/`
+    is what the Lakehouse discovers, which is what puts it in the engine's
+    catalog AND what its SQL analytics endpoint exposes as T-SQL. Silver's dbt
+    models are given this as `location_root` for exactly that reason.
+
+    In `abfss://` form because that is the address the ENGINE reads; the
+    functions above speak to the DFS surface over HTTP and take the pieces
+    separately.
+    """
+    return f"abfss://{workspace}@onelake.dfs.fabric.microsoft.com/{lakehouse}/Tables"
+
+
 def upload(target: Target, workspace: str, item: str, rel: str, blob: bytes) -> int:
     """create → append → flush. Returns bytes written."""
     tok = target.storage_token()

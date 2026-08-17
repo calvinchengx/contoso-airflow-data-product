@@ -23,7 +23,10 @@ contoso_gold:
     dev:
       type: fabric
       driver: "{{ env_var('DBT_ODBC_DRIVER', 'ODBC Driver 18 for SQL Server') }}"
-      server: "{{ env_var('DBT_HOST', 'fabric-emulator') }}"
+      # Unroutable placeholder, not a local container name -- see the note in
+      # the silver profile. `dbt ls` never connects, so this is only ever read
+      # at render time; if it is ever read at RUN time, failing is correct.
+      server: "{{ env_var('DBT_HOST', 'render-time-placeholder.invalid') }}"
       port: "{{ env_var('DBT_PORT', '1433') | int }}"
       database: "{{ env_var('DBT_DATABASE', 'lake') }}"
       schema: dbo

@@ -28,7 +28,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import tls
 
@@ -49,15 +49,19 @@ class Target:
 
     api_root: str
     onelake_url: str
-    # The emulator serves OneLake on the Fabric port and routes by Host header,
-    # the way `curl --resolve` does. Real Fabric has its own hostname, so this
-    # is empty there. It is the ONLY target difference in this file, and it
-    # arrives as data rather than as a branch.
+    # A deployment whose OneLake is reached by Host header rather than by its
+    # own hostname sets this; real Fabric leaves it empty. Data, not a branch —
+    # which is why `io/onelake.py` can honour it without knowing why.
     onelake_host_header: str
     token_url: str
     client_id: str
     client_secret: str
-    name: str = "emulator"
+    # Extra object-store options the DEPLOYMENT needs, passed through to
+    # delta-rs untouched. Empty against real Fabric. A dict rather than named
+    # fields because the product must not have an opinion about which options
+    # a target requires — see delta_storage_options().
+    storage_options: dict = field(default_factory=dict)
+    name: str = "target"
 
     @classmethod
     def from_connection(cls, conn_id: str = "fabric") -> "Target":
@@ -73,7 +77,8 @@ class Target:
             token_url=extra["token_url"],
             client_id=extra["client_id"],
             client_secret=extra["client_secret"],
-            name=extra.get("target", "emulator"),
+            storage_options=extra.get("storage_options", {}),
+            name=extra.get("target", "target"),
         )
 
     @classmethod
@@ -87,7 +92,9 @@ class Target:
             token_url=os.environ["ENTRA_TOKEN_URL"],
             client_id=os.environ["ENTRA_CLIENT_ID"],
             client_secret=os.environ["ENTRA_CLIENT_SECRET"],
-            name=os.environ.get("FABRIC_TARGET", "emulator"),
+            storage_options=json.loads(
+                os.environ.get("FABRIC_STORAGE_OPTIONS", "{}")),
+            name=os.environ.get("FABRIC_TARGET", "target"),
         )
 
     # Tokens are cached per audience until shortly before expiry. Not an
@@ -133,21 +140,22 @@ class Target:
         own credential model does not have — see pyproject.toml for why that
         decided the architecture.
 
-        The emulator serves TLS with a self-signed cert. object_store has no
-        CA-bundle option, so invalid certificates are allowed HERE and only
-        here — a narrow, named exception rather than turning verification off
-        for the process, which would also silence a real failure against real
-        Fabric.
+        ANYTHING ELSE COMES FROM THE CONNECTION, and that is the whole point.
+        This used to read `if self.is_emulator:` and add an endpoint override
+        and `azure_allow_invalid_certificates` — the last place in this product
+        where code asked which target had answered. A deployment difference
+        expressed as a branch is a deployment difference the product has to be
+        edited to change, and it is exactly what the `onelake_host_header`
+        seam already avoids by arriving as data.
+
+        So the deployment states its own storage options and this merges them.
+        Against real Fabric the connection supplies none and the default
+        Azure endpoint applies; locally the platform supplies the emulator's
+        endpoint and its self-signed-certificate allowance. Neither is named
+        here.
         """
-        opts = {
+        return {
             "azure_storage_account_name": "onelake",
             "azure_storage_token": self.storage_token(),
+            **self.storage_options,
         }
-        if self.is_emulator:
-            opts["azure_endpoint"] = f"{self.onelake_url}/onelake"
-            opts["azure_allow_invalid_certificates"] = "true"
-        return opts
-
-    @property
-    def is_emulator(self) -> bool:
-        return self.name == "emulator"

@@ -28,7 +28,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from deltalake import DeltaTable, write_deltalake
 
-from . import catalog
 from .io import onelake
 from .target import Target
 
@@ -58,16 +57,19 @@ def _parse(blob: bytes, ext: str) -> list[dict]:
 
 
 def build_table(target: Target, workspace: str, lakehouse: str,
-                manifest: list[dict], table: str,
-                agent_url: str) -> dict:
+                manifest: list[dict], table: str) -> dict:
     """Read the landed parts back, parse them, write one bronze Delta table.
 
-    Registers the result with the engine's catalog. `agent_url` is required
-    rather than optional: an unregistered bronze table is invisible to dbt, and
-    a default of None made that a silent skip.
-    Writing the bytes is not enough: delta-rs puts a real Delta table at
-    `Tables/<name>` and the engine still answers TABLE_OR_VIEW_NOT_FOUND for
-    the NAME, which is how dbt resolves `source()`. See catalog.py.
+    WRITING THE DELTA IS THE WHOLE JOB. This used to also register the table
+    with the engine's catalog through a statement agent, on the belief that a
+    Delta table under `Tables/` is invisible to the engine by name. Measured
+    against a COLD engine, with that step removed entirely:
+
+        lake.bronze_pos_customers -> 102,000
+
+    A Lakehouse discovers its own `Tables/` -- on real Fabric, and here -- so
+    the registration was compensating for nothing, and it was the last thing
+    in this product that needed to know a statement agent existed.
     """
     rows: list[dict] = []
     for part in manifest:
@@ -95,11 +97,5 @@ def build_table(target: Target, workspace: str, lakehouse: str,
     if landed_rows != len(rows):
         raise ValueError(f"{table}: wrote {len(rows)} rows, delta-rs reads {landed_rows}")
 
-    out = {"table": table, "rows": landed_rows, "version": dt.version(),
-           "parts": len(manifest)}
-    # AFTER the write and after it is confirmed. Registering a path that does
-    # not hold a valid table yet would make the catalog assert something
-    # untrue, and the failure would surface in silver rather than here.
-    out["registered"] = catalog.register(
-        target, agent_url, workspace, lakehouse, table)
-    return out
+    return {"table": table, "rows": landed_rows, "version": dt.version(),
+            "parts": len(manifest)}

@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import pendulum
 from airflow.sdk import Asset, dag, task
-from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig
+from cosmos import (DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig,
+                    RenderConfig)
+from cosmos.constants import TestBehavior
 
 import os
 import pathlib
+import shutil
 
 from contoso_product import gold_dir
 
@@ -37,9 +40,18 @@ LAKEHOUSE = "lake.Lakehouse"
 # somewhere else in production, and a hardcoded path would be right in exactly
 # one of those.
 DBT_DIR = pathlib.Path(__file__).resolve().parent.parent / "dbt"
-# The venv dbt, not whatever is first on PATH -- cosmos shells out, and the
-# worker's PATH is not guaranteed to lead anywhere useful from a task.
-DBT_BIN = os.environ.get("DBT_EXECUTABLE", "/home/airflow/.local/bin/dbt")
+# WHERE THIS DEPLOYMENT PUT dbt -- resolved, never assumed. cosmos shells out,
+# so it needs a real path, and the previous default named the local worker
+# image's own layout (`/home/airflow/.local/bin/dbt`). That is a property of
+# one deployment; on MWAA, Composer, Astronomer or a plain venv it is wrong,
+# and wrong in the quiet way -- the DAG parses and every dbt task fails at
+# execution with "no such file".
+#
+# `shutil.which` asks the environment the tasks actually run in. An explicit
+# DBT_EXECUTABLE still wins, for a deployment that installs dbt somewhere off
+# PATH. Falling back to the bare name rather than raising keeps DAG PARSING
+# working where dbt is absent from the scheduler but present on the worker.
+DBT_BIN = os.environ.get("DBT_EXECUTABLE") or shutil.which("dbt") or "dbt"
 
 # GOLD'S sources.yml DEMANDS THESE AT PARSE TIME, and not because the shared
 # project is careless. It reads:
@@ -167,26 +179,7 @@ def contoso_daily():
         from contoso_airflow import bronze
         from contoso_airflow.target import Target
 
-        import os
-
         target = Target.from_connection("fabric")
-        # Where statements go. The platform supplies it; silver cannot resolve
-        # `source()` against tables the engine was never told about, so this is
-        # not optional decoration.
-        # REQUIRED, not optional. Silver resolves `source()` by name, and a
-        # bronze table the engine was never told about does not exist to dbt.
-        # This used to be `.get(...)` and the platform did not set it, so
-        # registration was skipped SILENTLY and the DAG reported success on a
-        # catalog that stayed empty -- the failure only visible three steps
-        # later, as eight simultaneous model errors blamed on the SQL.
-        try:
-            agent_url = os.environ["FABRIC_SPARK_AGENT_URL"]
-        except KeyError:
-            raise RuntimeError(
-                "FABRIC_SPARK_AGENT_URL is not set, so bronze cannot be "
-                "registered with the engine's catalog and every silver model "
-                "would fail to resolve its source. The platform supplies it."
-            ) from None
         vendor = next(v for v in VENDORS if v["name"] == landed["vendor"])
         out = {}
         for feed, table in vendor["tables"].items():
@@ -194,8 +187,7 @@ def contoso_daily():
             if not parts:
                 raise ValueError(f"{landed['vendor']}: nothing landed for feed {feed!r}")
             out[table] = bronze.build_table(
-                target, ctx["workspace"], ctx["lakehouse"], parts, table,
-                agent_url=agent_url)
+                target, ctx["workspace"], ctx["lakehouse"], parts, table)
         return {"vendor": landed["vendor"], "tables": out}
 
     @task(outlets=[Asset("contoso://bronze")])
@@ -225,10 +217,12 @@ def contoso_daily():
         resolves them from the same connection every other task uses, and the
         dbt task groups read them back through templating.
         """
-        from contoso_airflow.catalog import tables_root
+        from contoso_airflow.io.onelake import tables_root
         from contoso_airflow.target import Target
+        from contoso_airflow.warehouse import endpoint
 
         target = Target.from_connection("fabric")
+        tds_host, tds_port = endpoint()
         return {
             # SILVER's bearer: Livy, on the Fabric control plane.
             "DBT_ACCESS_TOKEN": target.fabric_token(),
@@ -248,8 +242,10 @@ def contoso_daily():
             # credential. Its own key, because both profiles are in the same
             # environment and one `DBT_ACCESS_TOKEN` cannot be both.
             "DBT_SQL_ACCESS_TOKEN": target.sql_token(),
-            "DBT_HOST": os.environ.get("FABRIC_TDS_HOST", "fabric-emulator"),
-            "DBT_PORT": os.environ.get("FABRIC_TDS_PORT", "1433"),
+            # FROM THE CONNECTION, not from an env var with a local default.
+            # The deployment that owns the Warehouse states where it is.
+            "DBT_HOST": tds_host,
+            "DBT_PORT": tds_port,
             # Gold BUILDS in the warehouse and READS the lakehouse endpoint;
             # two databases on the one TDS endpoint, joined by three-part name.
             "DBT_DATABASE": ctx["warehouse_id"],
@@ -307,6 +303,22 @@ def contoso_daily():
     gold = DbtTaskGroup(
         group_id="gold",
         project_config=ProjectConfig(dbt_project_path=gold_dir()),
+        # TESTS AFTER ALL MODELS, and only for gold. Cosmos's default puts a
+        # test task immediately after each model -- right for silver, where
+        # every test belongs to the one model it follows. Gold's suite includes
+        # SINGULAR tests that span the star: `revenue_summary_loses_no_revenue`
+        # compares a fact against its summary, `every_country_resolves_to_the
+        # _dimension` joins a fact to a dimension. Cosmos attaches such a test
+        # to ONE of the models it references, so it runs while the others do
+        # not exist yet. Measured: dim_customer built, then its test task died
+        # on `Invalid object name '…dbo.fct_daily_revenue'` -- a table three
+        # models downstream. That reads like a broken test and is an ordering
+        # artefact.
+        #
+        # The cost is honest: gold's 67 tests become one task rather than one
+        # per model, so a single failure no longer isolates itself. That is the
+        # right trade only because the alternative is tests that cannot pass.
+        render_config=RenderConfig(test_behavior=TestBehavior.AFTER_ALL),
         profile_config=ProfileConfig(
             profile_name="contoso_gold", target_name="dev",
             profiles_yml_filepath=DBT_DIR / "gold" / "profiles.yml"),
@@ -328,14 +340,17 @@ def contoso_daily():
         built somewhere the Lakehouse cannot see.
         """
         from contoso_airflow.target import Target
+        from contoso_airflow.warehouse import endpoint
         from contoso_airflow.warehouse import reflect as do_reflect
 
+        host, port = endpoint()
         expect = sorted(p.stem for p in (DBT_DIR / "silver" / "models").glob("*.sql"))
         counts = do_reflect(
             Target.from_connection("fabric"),
+            workspace_id=ctx["workspace_id"],
             lakehouse_id=ctx["lakehouse_id"],
-            host=os.environ.get("FABRIC_TDS_HOST", "fabric-emulator"),
-            port=os.environ.get("FABRIC_TDS_PORT", "1433"),
+            host=host,
+            port=port,
             expect=expect,
             schema=os.environ.get("CONTOSO_SILVER_SCHEMA", "dbo"),
         )

@@ -19,6 +19,17 @@ select
     line.product_id,
     cast(line.quantity as int) as quantity,
     {{ money('line.unit_price') }} as unit_price,
-    {{ money('cast(line.quantity as int) * line.unit_price') }} as amount
+    {{ money('cast(line.quantity as int) * line.unit_price') }} as amount,
+    -- A LITERAL, because the storefront does not publish one. bronze_web_orders
+    -- carries web_order_id, email, placed_at, status and the nested lines, and
+    -- nothing in the lines names a currency either -- so this is an assertion
+    -- about the vendor, not a passthrough.
+    --
+    -- 'USD' is not this model's invention: contoso-data-product's own silver
+    -- states the same thing (`F.lit("USD").alias("currency")`), and gold --
+    -- which both platforms share -- joins fx on it. Omitting it here is what
+    -- made `fct_sales` fail with `Invalid column name 'currency'`, three
+    -- layers from the decision that caused it.
+    'USD' as currency
 from {{ source('bronze', 'bronze_web_orders') }} as o
 lateral view explode(o.lines) exploded as line
