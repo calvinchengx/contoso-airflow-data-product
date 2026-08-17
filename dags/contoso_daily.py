@@ -22,9 +22,39 @@ from __future__ import annotations
 
 import pendulum
 from airflow.sdk import Asset, dag, task
+from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig
+
+import os
+import pathlib
+
+from contoso_product import gold_dir
 
 WORKSPACE = "contoso-analytics"
 LAKEHOUSE = "lake.Lakehouse"
+
+# The product's dbt projects, resolved from THIS FILE rather than an absolute
+# path: the bundle mounts the repo at /opt/product locally and clones it
+# somewhere else in production, and a hardcoded path would be right in exactly
+# one of those.
+DBT_DIR = pathlib.Path(__file__).resolve().parent.parent / "dbt"
+# The venv dbt, not whatever is first on PATH -- cosmos shells out, and the
+# worker's PATH is not guaranteed to lead anywhere useful from a task.
+DBT_BIN = os.environ.get("DBT_EXECUTABLE", "/home/airflow/.local/bin/dbt")
+
+# GOLD'S sources.yml DEMANDS THESE AT PARSE TIME, and not because the shared
+# project is careless. It reads:
+#
+#     database: "{{ env_var('CONTOSO_SILVER_DATABASE', env_var('LAKEHOUSE_ID')) }}"
+#
+# The outer call has a fallback, but the fallback is ITSELF an env_var with no
+# default, and Jinja evaluates it eagerly -- so LAKEHOUSE_ID is required even
+# when CONTOSO_SILVER_DATABASE is set. Cosmos renders by running `dbt ls`, so an
+# unset value stops the DAG appearing at all.
+#
+# Satisfied here rather than fixed there: contoso-data-product is consumed by
+# three other platforms, and changing a shared project to suit one consumer's
+# renderer is the wrong direction. The real value is supplied per run.
+os.environ.setdefault("LAKEHOUSE_ID", "00000000-0000-0000-0000-000000000000")
 
 # Which vendor produces which bronze tables. Named here because the mapping is
 # the pipeline's shape, and burying it in four near-identical task bodies is how
@@ -185,9 +215,135 @@ def contoso_daily():
         return {"total_rows": total,
                 "tables": {t: m["rows"] for r in results for t, m in r["tables"].items()}}
 
+    @task
+    def fabric_env(ctx: dict) -> dict:
+        """The dbt profiles' environment, minted per run.
+
+        Both profiles are entirely `env_var()`-driven so production points them
+        at real Fabric unedited -- which means SOMETHING has to supply those
+        values, and a bearer cannot be baked into a rendered DAG. This task
+        resolves them from the same connection every other task uses, and the
+        dbt task groups read them back through templating.
+        """
+        from contoso_airflow.catalog import tables_root
+        from contoso_airflow.target import Target
+
+        target = Target.from_connection("fabric")
+        return {
+            # SILVER's bearer: Livy, on the Fabric control plane.
+            "DBT_ACCESS_TOKEN": target.fabric_token(),
+            "DBT_FABRIC_ENDPOINT": f"{target.api_root}/v1",
+            "DBT_WORKSPACE_ID": ctx["workspace_id"],
+            "DBT_LAKEHOUSE_ID": ctx["lakehouse_id"],
+            "DBT_LAKEHOUSE_NAME": ctx["lakehouse"].split(".", 1)[0],
+            # WHERE SILVER'S TABLES GO. Without it dbt-fabricspark issues
+            # `create or replace table` with no LOCATION, the engine writes to
+            # its own warehouse directory, and the tables are real, queryable
+            # and INVISIBLE to the Lakehouse -- so the SQL analytics endpoint
+            # never reflects them and gold's every source() fails. Measured:
+            # the endpoint listed the 8 bronze tables and none of silver's.
+            "DBT_SILVER_LOCATION_ROOT": tables_root(
+                ctx["workspace"], ctx["lakehouse"]),
+            # GOLD's bearer: TDS FedAuth, a different audience to the same
+            # credential. Its own key, because both profiles are in the same
+            # environment and one `DBT_ACCESS_TOKEN` cannot be both.
+            "DBT_SQL_ACCESS_TOKEN": target.sql_token(),
+            "DBT_HOST": os.environ.get("FABRIC_TDS_HOST", "fabric-emulator"),
+            "DBT_PORT": os.environ.get("FABRIC_TDS_PORT", "1433"),
+            # Gold BUILDS in the warehouse and READS the lakehouse endpoint;
+            # two databases on the one TDS endpoint, joined by three-part name.
+            "DBT_DATABASE": ctx["warehouse_id"],
+            "LAKEHOUSE_ID": ctx["lakehouse_id"],
+            "CONTOSO_SILVER_DATABASE": ctx["lakehouse_id"],
+            # `dbo`, not the Spark database name: the endpoint reflects
+            # OneLake `Tables/` into dbo regardless of the catalog namespace
+            # Spark wrote under. Measured, not assumed.
+            "CONTOSO_SILVER_SCHEMA": os.environ.get("CONTOSO_SILVER_SCHEMA", "dbo"),
+        }
+
     ctx = provision()
     landed = land.partial(ctx=ctx).expand(vendor=VENDORS)
-    report(to_bronze.partial(ctx=ctx).expand(landed=landed))
+    bronze_done = report(to_bronze.partial(ctx=ctx).expand(landed=landed))
+    env = fabric_env(ctx)
+
+    # dbt's own graph becomes Airflow's. Cosmos renders ONE TASK PER MODEL with
+    # dbt's dependencies as the edges, so bronze -> silver -> gold appears in the
+    # UI as real lineage and a failing model retries alone rather than re-running
+    # `dbt build`. Its per-model test tasks are also the quality gate: a failing
+    # test fails its own task and its dependents never run, which is why there is
+    # no separate contract operator re-checking the same rules in Python.
+    # A DICT WHOSE VALUES ARE TEMPLATES, not a template that renders a dict.
+    # `env` is a templated field, so Airflow renders each VALUE -- give it one
+    # string for the whole mapping and it renders to the repr of a dict, dbt
+    # receives no variables at all, and the profile silently falls back to its
+    # render-time placeholders. The symptom is a 401 against
+    # workspaces/00000000-0000-0000-0000-000000000000, which reads like an auth
+    # problem and is really an empty environment.
+    def _env(key: str) -> str:
+        return "{{ ti.xcom_pull(task_ids='fabric_env')['" + key + "'] }}"
+
+    ENV = {k: _env(k) for k in (
+        "DBT_ACCESS_TOKEN", "DBT_SQL_ACCESS_TOKEN", "DBT_FABRIC_ENDPOINT",
+        "DBT_WORKSPACE_ID", "DBT_LAKEHOUSE_ID", "DBT_LAKEHOUSE_NAME",
+        "DBT_SILVER_LOCATION_ROOT", "DBT_HOST", "DBT_PORT",
+        "DBT_DATABASE", "LAKEHOUSE_ID", "CONTOSO_SILVER_DATABASE",
+        "CONTOSO_SILVER_SCHEMA")}
+
+    silver = DbtTaskGroup(
+        group_id="silver",
+        project_config=ProjectConfig(dbt_project_path=DBT_DIR / "silver"),
+        profile_config=ProfileConfig(
+            profile_name="contoso_silver", target_name="dev",
+            profiles_yml_filepath=DBT_DIR / "silver" / "profiles.yml"),
+        execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
+        operator_args={"env": ENV, "install_deps": True},
+    )
+
+    # GOLD'S MODELS ARE NOT IN THIS REPO. contoso-data-product ships them -- 9
+    # models, 5 singular tests, 62 schema tests -- and exists so gold is not
+    # copied per platform: "two fct_sales.sql files agree until the day someone
+    # fixes a bug in one of them". This product supplies the profile and points
+    # dbt at the installed package.
+    gold = DbtTaskGroup(
+        group_id="gold",
+        project_config=ProjectConfig(dbt_project_path=gold_dir()),
+        profile_config=ProfileConfig(
+            profile_name="contoso_gold", target_name="dev",
+            profiles_yml_filepath=DBT_DIR / "gold" / "profiles.yml"),
+        execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
+        operator_args={"env": ENV},
+    )
+
+    @task
+    def reflect(ctx: dict) -> dict:
+        """Gold reads silver over TDS. Prove it can, before gold tries.
+
+        THE MODELS ARE THE LIST. Reading the silver project's own directory
+        rather than repeating the names means a model added tomorrow is
+        checked tomorrow, and a check that silently stops covering something
+        is the failure mode this whole pipeline is built against.
+
+        Placed between the two task groups because it separates two failures
+        that look identical from inside dbt: silver never built, and silver
+        built somewhere the Lakehouse cannot see.
+        """
+        from contoso_airflow.target import Target
+        from contoso_airflow.warehouse import reflect as do_reflect
+
+        expect = sorted(p.stem for p in (DBT_DIR / "silver" / "models").glob("*.sql"))
+        counts = do_reflect(
+            Target.from_connection("fabric"),
+            lakehouse_id=ctx["lakehouse_id"],
+            host=os.environ.get("FABRIC_TDS_HOST", "fabric-emulator"),
+            port=os.environ.get("FABRIC_TDS_PORT", "1433"),
+            expect=expect,
+            schema=os.environ.get("CONTOSO_SILVER_SCHEMA", "dbo"),
+        )
+        for table, rows in sorted(counts.items()):
+            print(f"silver {table}: {rows} rows visible over TDS", flush=True)
+        return counts
+
+    bronze_done >> env >> silver >> reflect(ctx) >> gold
 
 
 contoso_daily()

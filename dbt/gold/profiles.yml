@@ -6,18 +6,36 @@
 # one of them". This product supplies the PROFILE and points dbt at
 # `gold_dir()`; a second copy of the SQL would make compare_products.py compare
 # two different definitions and call it agreement.
+# EVERY env_var HAS A DEFAULT, and that is a cosmos requirement rather than
+# laziness. Cosmos renders the DAG at PARSE time by running `dbt ls`, which
+# parses the project and therefore resolves this profile -- but the bearer is
+# minted per RUN, so at parse time it does not exist yet. Without defaults the
+# dag-processor fails with `Env var required but not provided:
+# 'DBT_ACCESS_TOKEN'` and the DAG never appears at all.
+#
+# `dbt ls` does not CONNECT, so a placeholder is sufficient for it. The real
+# values arrive at execution through the task environment, which is where a
+# credential belongs -- baking one into a rendered DAG would put it in the
+# metadata database.
 contoso_gold:
   target: dev
   outputs:
     dev:
       type: fabric
       driver: "{{ env_var('DBT_ODBC_DRIVER', 'ODBC Driver 18 for SQL Server') }}"
-      server: "{{ env_var('DBT_HOST') }}"
-      port: "{{ env_var('DBT_PORT') | int }}"
-      database: "{{ env_var('DBT_DATABASE') }}"
+      server: "{{ env_var('DBT_HOST', 'fabric-emulator') }}"
+      port: "{{ env_var('DBT_PORT', '1433') | int }}"
+      database: "{{ env_var('DBT_DATABASE', 'lake') }}"
       schema: dbo
       authentication: "ActiveDirectoryAccessToken"
-      access_token: "{{ env_var('DBT_ACCESS_TOKEN') }}"
+      # NOT `DBT_ACCESS_TOKEN` -- that one is silver's, and its audience is the
+      # Fabric control plane. TDS FedAuth takes an AZURE SQL token, and sending
+      # the other is rejected by the front with `login failed: invalid token:
+      # audience not accepted`, which arrives through dbt as a generic
+      # `Invalid authorization specification` and reads like a broken
+      # credential rather than the wrong audience. Both profiles are rendered
+      # from the same task environment, so they need separate keys.
+      access_token: "{{ env_var('DBT_SQL_ACCESS_TOKEN', 'render-time-placeholder') }}"
       encrypt: false
       trust_cert: true
       threads: 1

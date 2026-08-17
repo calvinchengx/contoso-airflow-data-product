@@ -7,7 +7,13 @@
 select
     o.web_order_id,
     lower(trim(o.email)) as email,
-    cast(to_date(o.placed_at) as date) as order_date,
+    -- to_timestamp FIRST, then cast. `to_date` on an ISO-8601 string fails in
+    -- Sail's parser -- `found T at 10:11`, the T of `2026-08-17T10:23:45` --
+    -- because it parses the literal rather than the value. Measured: to_date on
+    -- a bare `2026-08-17` works, to_timestamp on the full ISO string works, and
+    -- the two-step is what the sibling's Spark silver does anyway
+    -- (`F.to_timestamp` then `F.to_date`).
+    cast(to_timestamp(o.placed_at) as date) as order_date,
     o.status,
     cast(line.line_no as int) as line_no,
     line.product_id,

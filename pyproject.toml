@@ -29,6 +29,11 @@ dependencies = [
     "dbt-core>=1.9,<2",
     "dbt-fabricspark>=1.9,<2",
     "dbt-fabric>=1.9,<2",
+    # Declared because THIS code calls it, not only dbt-fabric: the reflection
+    # gate connects over TDS itself to prove silver is visible before gold
+    # builds. Leaving it implicit would mean a transitive dependency of an
+    # adapter deciding whether our own witness runs.
+    "mssql-python>=1.0,<2",
     # Renders a dbt project as one Airflow task per model, with dbt's own graph
     # as the dependencies -- which is what puts bronze -> silver -> gold in the
     # UI as real edges and lets one model retry alone.

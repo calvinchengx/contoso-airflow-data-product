@@ -34,6 +34,13 @@ from . import tls
 
 FABRIC_AUDIENCE = "https://api.fabric.microsoft.com"
 STORAGE_AUDIENCE = "https://storage.azure.com"
+# The WAREHOUSE is reached over TDS, and TDS FedAuth takes an Azure SQL token —
+# not a Fabric one. Sending the control-plane token there is not a near miss:
+# the front rejects it with `login failed: invalid token: audience not
+# accepted`, which surfaces through dbt as a generic `Database Error / Invalid
+# authorization specification` and reads like a broken credential rather than
+# the wrong one. This audience is correct against real Fabric too.
+SQL_AUDIENCE = "https://database.windows.net"
 
 
 @dataclass(frozen=True)
@@ -114,6 +121,10 @@ class Target:
 
     def storage_token(self) -> str:
         return self.token(STORAGE_AUDIENCE)
+
+    def sql_token(self) -> str:
+        """For the Warehouse and the lakehouse SQL analytics endpoint."""
+        return self.token(SQL_AUDIENCE)
 
     def delta_storage_options(self) -> dict:
         """What delta-rs needs to reach OneLake as us.

@@ -18,6 +18,21 @@ models:
   contoso_silver:
     +materialized: table
     +file_format: delta
+    # WHERE THE TABLE LIVES, and it is not a detail. Without `location_root`
+    # the adapter emits `create or replace table x as select ...` with no
+    # LOCATION, the engine writes into its own warehouse directory, and the
+    # result is a table that is real, queryable from Spark, and invisible to
+    # the Lakehouse -- so its SQL analytics endpoint never reflects it and
+    # every one of gold's `source('silver', ...)` fails to resolve. Measured
+    # before this line existed: the endpoint listed the 8 bronze tables (which
+    # bronze registers with an explicit LOCATION) and none of silver's 7.
+    #
+    # Under `Tables/` because that is the directory a Lakehouse discovers.
+    # The value is supplied per run by the DAG's `fabric_env` from
+    # `catalog.tables_root()`, so there is ONE spelling of the OneLake URI.
+    # The default is only for cosmos's parse-time `dbt ls`, which does not
+    # connect.
+    +location_root: "{{ env_var('DBT_SILVER_LOCATION_ROOT', 'abfss://render-time-placeholder@onelake.dfs.fabric.microsoft.com/lake.Lakehouse/Tables') }}"
 
 vars:
   # The vendors disagree about country spelling ON PURPOSE -- POS ships "USA",

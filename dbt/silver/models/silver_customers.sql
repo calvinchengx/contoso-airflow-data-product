@@ -2,12 +2,19 @@
 -- COLUMNS NAMED EXPLICITLY, and this is a deliberate divergence from the
 -- sibling's Spark silver, which carries every bronze column through.
 --
--- Neither exclusion mechanism is available here: Sail has no `SELECT * EXCEPT`
--- (`found _rn at 548:551 expected query`), and `dbt_utils.star()` cannot
--- introspect columns through this adapter -- it compiled to
--- `/* no columns returned from star() macro */`, leaving a bare comma. So the
--- choice is a hand-written 100-column list that rots the first time a vendor
--- adds a field, or naming what silver actually owes gold.
+-- Neither exclusion mechanism is available here. Sail has no SELECT-star-EXCEPT
+-- (it answers "found _rn ... expected query"), and dbt_utils.star cannot
+-- introspect columns through this adapter -- it emits its own placeholder
+-- comment and leaves a bare comma. So the choice is a hand-written 100-column
+-- list that rots the first time a vendor adds a field, or naming what silver
+-- actually owes gold.
+--
+-- NOTE ON THIS COMMENT ITSELF: no backticks and no block-comment markers below.
+-- A model comment is submitted to the engine as part of the statement, and an
+-- inner slash-star inside a dash-dash comment opens a block comment Sail never
+-- closes -- it swallows the query and reports "found end of input expected
+-- something else, or backtick". Prose in a model is executable context, not
+-- documentation around it.
 --
 -- Naming them is also the better contract: these six are what gold reads, and a
 -- silver that passes through a hundred unexamined columns is not conformed, it

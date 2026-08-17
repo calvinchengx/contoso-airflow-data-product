@@ -4,6 +4,17 @@
 # to the emulator's Livy surface, the emulator drives its statement agent, and
 # Sail executes. Every value here is env-driven, so production points the same
 # profile at real Fabric and no model changes.
+# EVERY env_var HAS A DEFAULT, and that is a cosmos requirement rather than
+# laziness. Cosmos renders the DAG at PARSE time by running `dbt ls`, which
+# parses the project and therefore resolves this profile -- but the bearer is
+# minted per RUN, so at parse time it does not exist yet. Without defaults the
+# dag-processor fails with `Env var required but not provided:
+# 'DBT_ACCESS_TOKEN'` and the DAG never appears at all.
+#
+# `dbt ls` does not CONNECT, so a placeholder is sufficient for it. The real
+# values arrive at execution through the task environment, which is where a
+# credential belongs -- baking one into a rendered DAG would put it in the
+# metadata database.
 contoso_silver:
   target: dev
   outputs:
@@ -15,10 +26,10 @@ contoso_silver:
       # which is exactly the seam this product uses everywhere else: the token is
       # minted from the target's credential and this file never learns whose.
       authentication: int_tests
-      accessToken: "{{ env_var('DBT_ACCESS_TOKEN') }}"
-      endpoint: "{{ env_var('DBT_FABRIC_ENDPOINT') }}"
-      workspaceid: "{{ env_var('DBT_WORKSPACE_ID') }}"
-      lakehouseid: "{{ env_var('DBT_LAKEHOUSE_ID') }}"
+      accessToken: "{{ env_var('DBT_ACCESS_TOKEN', 'render-time-placeholder') }}"
+      endpoint: "{{ env_var('DBT_FABRIC_ENDPOINT', 'https://api.fabric.microsoft.com:9443/v1') }}"
+      workspaceid: "{{ env_var('DBT_WORKSPACE_ID', '00000000-0000-0000-0000-000000000000') }}"
+      lakehouseid: "{{ env_var('DBT_LAKEHOUSE_ID', '00000000-0000-0000-0000-000000000000') }}"
       lakehouse: "{{ env_var('DBT_LAKEHOUSE_NAME', 'lake') }}"
       schema: "{{ env_var('DBT_LAKEHOUSE_NAME', 'lake') }}"
       threads: 1

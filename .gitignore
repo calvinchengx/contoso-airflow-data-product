@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 dist/
 .dlt/
+
+# dbt writes an anonymous-usage id here on first run. Machine state, not the project.
+.user.yml
+dbt/*/target/
+dbt/*/dbt_packages/
+dbt/*/logs/

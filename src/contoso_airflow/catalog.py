@@ -42,6 +42,18 @@ class RegistrationError(RuntimeError):
     """A bronze table the engine could not be told about."""
 
 
+def tables_root(workspace: str, lakehouse: str) -> str:
+    """`Tables/` in OneLake -- where a Lakehouse's tables ARE.
+
+    Not a convention this product invented. A Delta directory under `Tables/`
+    is what the Lakehouse discovers and what its SQL analytics endpoint
+    exposes as T-SQL, which is the only way gold can read silver by three-part
+    name. Silver's dbt models are given this as `location_root` for exactly
+    that reason -- see the note in dbt/silver/dbt_project.yml.
+    """
+    return f"abfss://{workspace}@onelake.dfs.fabric.microsoft.com/{lakehouse}/Tables"
+
+
 def table_uri(workspace: str, lakehouse: str, table: str) -> str:
     """The production-shaped OneLake URI for a bronze table.
 
@@ -49,8 +61,7 @@ def table_uri(workspace: str, lakehouse: str, table: str) -> str:
     reads on both targets -- the emulator resolves the host itself. Building it
     here rather than in each caller keeps one spelling.
     """
-    return (f"abfss://{workspace}@onelake.dfs.fabric.microsoft.com"
-            f"/{lakehouse}/Tables/{table}")
+    return f"{tables_root(workspace, lakehouse)}/{table}"
 
 
 def register(target: Target, agent_url: str, workspace: str, lakehouse: str,

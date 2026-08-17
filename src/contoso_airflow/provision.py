@@ -37,7 +37,33 @@ def _find(items: list[dict], name: str) -> dict | None:
     return next((i for i in items if i.get("displayName") == name), None)
 
 
-def ensure_workspace(target: Target, workspace: str, lakehouse: str) -> dict:
+def _ensure_warehouse(target: Target, workspace_id: str, name: str) -> dict:
+    """The Warehouse gold builds into.
+
+    A SEPARATE ITEM FROM THE LAKEHOUSE, because that is what Fabric gives you:
+    a Lakehouse is Delta that Spark writes and T-SQL only reads, and gold's
+    star is written in T-SQL. Both are databases on the same TDS endpoint, so
+    gold reads silver across the boundary by three-part name.
+
+    Created through `/items` with an explicit type rather than a typed
+    endpoint, which is the shape the sibling platform uses and the one real
+    Fabric documents for Warehouse.
+    """
+    status, items = _api(target, "GET", f"/v1/workspaces/{workspace_id}/items")
+    if status >= 300:
+        raise RuntimeError(f"cannot list items: {status} {items}")
+    wh = next((i for i in items.get("value", [])
+               if i.get("displayName") == name and i.get("type") == "Warehouse"), None)
+    if wh is None:
+        status, wh = _api(target, "POST", f"/v1/workspaces/{workspace_id}/items",
+                          {"displayName": name, "type": "Warehouse"})
+        if status >= 300:
+            raise RuntimeError(f"cannot create warehouse {name!r}: {status} {wh}")
+    return wh
+
+
+def ensure_workspace(target: Target, workspace: str, lakehouse: str,
+                     warehouse: str = "contoso_warehouse") -> dict:
     """Return the context every later task needs: names, and the ids they map to."""
     status, listing = _api(target, "GET", "/v1/workspaces")
     if status >= 300:
@@ -62,6 +88,8 @@ def ensure_workspace(target: Target, workspace: str, lakehouse: str) -> dict:
         if status >= 300:
             raise RuntimeError(f"cannot create lakehouse {display!r}: {status} {lh}")
 
+    wh = _ensure_warehouse(target, ws["id"], warehouse)
+
     from datetime import datetime, timezone
     return {
         # OneLake addresses by NAME, the control plane by id. Both travel.
@@ -69,5 +97,9 @@ def ensure_workspace(target: Target, workspace: str, lakehouse: str) -> dict:
         "workspace_id": ws["id"],
         "lakehouse": lakehouse,
         "lakehouse_id": lh["id"],
+        # TDS addresses a database by the ITEM ID, for both the warehouse gold
+        # writes and the lakehouse endpoint gold reads.
+        "warehouse": warehouse,
+        "warehouse_id": wh["id"],
         "day": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
