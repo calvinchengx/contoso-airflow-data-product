@@ -19,6 +19,10 @@ dependencies = [
     "dlt==1.30.0",
     "deltalake>=0.23,<2",
     "pyarrow>=18,<24",
+    # The ERP vendor's stream. A Kafka client is the only way to consume what
+    # Debezium produced -- the alternative, reading the ERP table directly,
+    # would be a snapshot and not a change stream at all.
+    "kafka-python>=2.0.2,<3",
 ]
 
 [project.optional-dependencies]

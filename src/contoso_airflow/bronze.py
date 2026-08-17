@@ -46,6 +46,13 @@ def _parse(blob: bytes, ext: str) -> list[dict]:
         return list(csv.DictReader(io.StringIO(blob.decode("utf-8-sig"))))
     if ext == "parquet":
         return pq.read_table(io.BytesIO(blob)).to_pylist()
+    if ext == "cdc":
+        # Debezium envelopes. A separate dialect rather than reusing "jsonl",
+        # because the row is inside `payload.after`/`before` and the OPERATION
+        # is the part that matters -- treating these as plain JSON Lines would
+        # land envelopes and quietly lose every insert/update/delete.
+        from .sources.erp_cdc import parse_envelope
+        return parse_envelope(blob)
     raise ValueError(f"no parser for .{ext} — bronze will not guess at a dialect")
 
 
@@ -55,8 +62,13 @@ def build_table(target: Target, workspace: str, lakehouse: str,
     rows: list[dict] = []
     for part in manifest:
         rel = part["path"]
-        ext = rel.rsplit(".", 1)[-1]
-        rows += _parse(onelake.read(target, workspace, lakehouse, rel), ext)
+        # THE MANIFEST DECLARES THE DIALECT; the extension is only a fallback.
+        # ERP parts are genuinely `.jsonl` -- a stream of envelopes is JSON
+        # Lines -- but parsing them as plain JSON Lines would land Debezium
+        # envelopes and lose every operation inside them. An extension says
+        # what the bytes are; only the producer knows what they MEAN.
+        dialect = part.get("dialect") or rel.rsplit(".", 1)[-1]
+        rows += _parse(onelake.read(target, workspace, lakehouse, rel), dialect)
 
     uri = f"az://{workspace}/{lakehouse}/Tables/{table}"
     opts = target.delta_storage_options()

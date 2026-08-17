@@ -38,6 +38,11 @@ VENDORS = [
     {"name": "contoso_reference", "conn": "contoso_reference",
      "tables": {"product_hierarchy": "bronze_ref_product_hierarchy",
                 "fx_rates": "bronze_ref_fx_rates"}},
+    # The fourth vendor is not an API. Its history arrives as a change STREAM,
+    # which is why it carries a broker rather than a base URL -- and why a
+    # snapshot of the same table would be a different and much weaker claim.
+    {"name": "contoso_erp", "conn": "contoso_erp",
+     "tables": {"changes": "bronze_erp_customer_changes"}},
 ]
 
 
@@ -80,6 +85,23 @@ def contoso_daily():
 
         target = Target.from_connection("fabric")
         conn = BaseHook.get_connection(vendor["conn"])
+        if vendor["name"] == "contoso_erp":
+            from contoso_airflow.sources import erp_cdc
+
+            # The broker and topic ride in the connection's extra, the way the
+            # HTTP vendors' base URL rides in its host. Same seam, same reason:
+            # in production these point at the real ERP's stream and this file
+            # does not change.
+            extra = conn.extra_dejson
+            resources = erp_cdc.erp_source(
+                bootstrap=extra["bootstrap"], topic=extra["topic"],
+                target=target, workspace=ctx["workspace"],
+                lakehouse=ctx["lakehouse"], day=ctx["day"])
+            manifest = [dict(row) for row in resources]
+            if not manifest:
+                raise ValueError("contoso_erp: landed nothing")
+            return {"vendor": vendor["name"], "manifest": manifest}
+
         source = {
             "contoso_pos": http_vendors.pos_source,
             "contoso_web": http_vendors.web_source,

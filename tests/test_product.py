@@ -52,3 +52,23 @@ def test_the_dag_imports_and_has_the_shape_the_pipeline_needs():
     pytest.importorskip("airflow.sdk")
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
     import contoso_daily  # noqa: F401
+
+
+def test_bronze_reads_a_debezium_envelope_not_the_envelope_itself():
+    # Parsing these as plain JSON Lines would land envelopes and lose every
+    # operation inside them -- green, and describing nothing.
+    import json
+    env = json.dumps({"payload": {"op": "u", "ts_ms": 1,
+                                  "before": {"erp_customer_id": 7, "segment": "old"},
+                                  "after": {"erp_customer_id": 7, "segment": "new"}}})
+    rows = bronze._parse(env.encode() + b"\n", "cdc")
+    assert rows == [{"erp_customer_id": 7, "segment": "new", "__op": "u", "__ts_ms": 1}]
+
+
+def test_a_delete_keeps_its_identity_from_before():
+    # A delete carries no `after`; dropping it would silently lose 1,200 events.
+    import json
+    env = json.dumps({"payload": {"op": "d", "ts_ms": 2,
+                                  "before": {"erp_customer_id": 9}, "after": None}})
+    rows = bronze._parse(env.encode() + b"\n", "cdc")
+    assert rows == [{"erp_customer_id": 9, "__op": "d", "__ts_ms": 2}]
