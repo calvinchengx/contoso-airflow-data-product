@@ -86,23 +86,27 @@ def contoso_daily():
             "contoso_reference": http_vendors.reference_source,
         }[vendor["name"]]
 
-        import dlt
-
-        pipeline = dlt.pipeline(
-            pipeline_name=f"{vendor['name']}_landing",
-            destination=dlt.destinations.duckdb(":memory:"),
-            dataset_name="manifest",
-        )
-        # dlt's own load target holds only the MANIFEST — what was fetched and
-        # where it went. The vendor's bytes never pass through dlt's normaliser,
-        # which is what keeps landing verbatim.
-        info = pipeline.run(source(
+        # ITERATE THE RESOURCE, do not run a load. dlt's extraction is what is
+        # wanted here -- the source definitions, the paging, the per-feed
+        # resources -- and its extract step is exactly that. A pipeline adds
+        # normalise+load, and the only thing there would be to load is the
+        # MANIFEST, into a throwaway in-memory database that is discarded when
+        # the task ends. That is machinery with no beneficiary, and reaching for
+        # it is what produced `InvalidInMemoryDuckdbCredentials` here.
+        #
+        # When incremental extraction arrives it will need a pipeline, because
+        # dlt keeps incremental state against one -- and it will need somewhere
+        # DURABLE to keep it, which an in-memory destination could never have
+        # provided. That is a Phase 2 decision, and pretending to have made it
+        # now would have left a pipeline whose state silently reset every run.
+        resources = source(
             base_url=conn.host, api_key=conn.password or "",
             target=target, workspace=ctx["workspace"],
-            lakehouse=ctx["lakehouse"], day=ctx["day"]))
-        rows = list(pipeline.dataset()[f"{vendor['name'].split('_')[1]}_landing"].iter_rows())
-        manifest = [dict(zip(r._fields, r)) if hasattr(r, "_fields") else dict(r) for r in rows]
-        return {"vendor": vendor["name"], "manifest": manifest, "load_id": str(info.loads_ids)}
+            lakehouse=ctx["lakehouse"], day=ctx["day"])
+        manifest = [dict(row) for row in resources]
+        if not manifest:
+            raise ValueError(f"{vendor['name']}: landed nothing")
+        return {"vendor": vendor["name"], "manifest": manifest}
 
     @task
     def to_bronze(landed: dict, ctx: dict) -> dict:
