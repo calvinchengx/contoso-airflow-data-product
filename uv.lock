@@ -739,8 +739,8 @@ wheels = [
 
 [[package]]
 name = "contoso-data-product"
-version = "0.1.1"
-source = { git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.1#cc5b29aa0b00ea160683af03f74f1bcad01a435f" }
+version = "0.2.0"
+source = { git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.2.0#589d755fe5a1c836eb03a48949aced6bb5ac6f84" }
 
 [[package]]
 name = "contoso-data-product-fabric-airflow3"
@@ -768,7 +768,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "astronomer-cosmos", specifier = ">=1.15,<2" },
-    { name = "contoso-data-product", git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.1" },
+    { name = "contoso-data-product", git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.2.0" },
     { name = "dbt-core", specifier = ">=1.9,<2" },
     { name = "dbt-fabric", specifier = ">=1.9,<2" },
     { name = "dbt-fabricspark", specifier = ">=1.9,<2" },

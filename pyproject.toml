@@ -83,4 +83,4 @@ override-dependencies = ["sqlparse>=0.6.0"]
 #
 # A tag is what production would pin regardless, so this is the honest form
 # rather than a workaround for the container.
-contoso-data-product = { git = "https://github.com/calvinchengx/contoso-data-product.git", tag = "v0.1.1" }
+contoso-data-product = { git = "https://github.com/calvinchengx/contoso-data-product.git", tag = "v0.2.0" }

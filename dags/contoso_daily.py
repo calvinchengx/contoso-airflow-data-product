@@ -30,7 +30,7 @@ import os
 import pathlib
 import shutil
 
-from contoso_product import gold_dir
+from contoso_product import gold_dir, silver_dir
 
 WORKSPACE = "contoso-analytics"
 LAKEHOUSE = "lake.Lakehouse"
@@ -82,7 +82,7 @@ os.environ.setdefault("LAKEHOUSE_ID", "00000000-0000-0000-0000-000000000000")
 #
 # The names are read from the projects themselves, so a model added tomorrow
 # publishes an asset tomorrow rather than being quietly absent.
-SILVER_TABLES = sorted(p.stem for p in (DBT_DIR / "silver" / "models").glob("*.sql"))
+SILVER_TABLES = sorted(p.stem for p in (silver_dir() / "models").glob("*.sql"))
 GOLD_MODELS = sorted(p.stem for p in (gold_dir() / "models").glob("*.sql"))
 SILVER_ASSETS = [Asset(f"contoso://silver/{t}") for t in SILVER_TABLES]
 GOLD_ASSETS = [Asset(f"contoso://gold/{m}") for m in GOLD_MODELS]
@@ -249,6 +249,13 @@ def contoso_daily():
             "DBT_WORKSPACE_ID": ctx["workspace_id"],
             "DBT_LAKEHOUSE_ID": ctx["lakehouse_id"],
             "DBT_LAKEHOUSE_NAME": ctx["lakehouse"].split(".", 1)[0],
+            # THE SAME NAME, UNDER THE CORE'S SPELLING. Core's silver reads
+            # `DBT_BRONZE_SCHEMA` because "lakehouse" is a Fabric word and the
+            # core product names no engine -- a Databricks catalog and a
+            # Snowflake schema answer the same question differently. Binding it
+            # here is this platform's job: on Fabric a Lakehouse's Tables/ are
+            # discovered into a schema named after the lakehouse.
+            "DBT_BRONZE_SCHEMA": ctx["lakehouse"].split(".", 1)[0],
             # WHERE SILVER'S TABLES GO. Without it dbt-fabricspark issues
             # `create or replace table` with no LOCATION, the engine writes to
             # its own warehouse directory, and the tables are real, queryable
@@ -300,18 +307,31 @@ def contoso_daily():
     ENV = {k: _env(k) for k in (
         "DBT_ACCESS_TOKEN", "DBT_SQL_ACCESS_TOKEN", "DBT_FABRIC_ENDPOINT",
         "DBT_WORKSPACE_ID", "DBT_LAKEHOUSE_ID", "DBT_LAKEHOUSE_NAME",
+        "DBT_BRONZE_SCHEMA",
         "DBT_SILVER_LOCATION_ROOT", "DBT_HOST", "DBT_PORT",
         "DBT_DATABASE", "LAKEHOUSE_ID", "CONTOSO_SILVER_DATABASE",
         "CONTOSO_SILVER_SCHEMA")}
 
+    # SILVER'S MODELS ARE NOT IN THIS REPO EITHER, as of core v0.2.0.
+    # contoso-data-product ships them -- 8 models, a conform macro, a singular
+    # test -- for the same reason it ships gold: this product carried the only
+    # dbt silver in the family while the core carried a second one in PySpark,
+    # and two definitions of one layer agree until they do not. This product
+    # supplies the profile and the deployment bindings; the models come from
+    # the package.
+    #
+    # `install_deps` is gone with them. Silver's one external package was
+    # dbt_utils, for a single `accepted_range`; that is now a singular test in
+    # the core project, so nothing here has to fetch a dbt package into an
+    # installed wheel's own directory before it can build.
     silver = DbtTaskGroup(
         group_id="silver",
-        project_config=ProjectConfig(dbt_project_path=DBT_DIR / "silver"),
+        project_config=ProjectConfig(dbt_project_path=silver_dir()),
         profile_config=ProfileConfig(
             profile_name="contoso_silver", target_name="dev",
             profiles_yml_filepath=DBT_DIR / "silver" / "profiles.yml"),
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
-        operator_args={"env": ENV, "install_deps": True},
+        operator_args={"env": ENV},
     )
 
     # GOLD'S MODELS ARE NOT IN THIS REPO. contoso-data-product ships them -- 9
@@ -363,7 +383,7 @@ def contoso_daily():
         from contoso_airflow.warehouse import reflect as do_reflect
 
         host, port = endpoint()
-        expect = sorted(p.stem for p in (DBT_DIR / "silver" / "models").glob("*.sql"))
+        expect = sorted(p.stem for p in (silver_dir() / "models").glob("*.sql"))
         counts = do_reflect(
             Target.from_connection("fabric"),
             workspace_id=ctx["workspace_id"],

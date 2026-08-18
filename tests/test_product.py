@@ -101,10 +101,21 @@ def test_silver_is_written_where_the_lakehouse_can_see_it():
     absent from the SQL analytics endpoint. Measured: the endpoint listed the
     8 bronze tables and none of silver's.
     """
-    project = (pathlib.Path(__file__).resolve().parents[1]
-               / "dbt" / "silver" / "dbt_project.yml").read_text()
+    # READ FROM THE INSTALLED CORE, not from this repo. As of core v0.2.0 the
+    # silver project lives in contoso-data-product and this product supplies
+    # only the profile and the bindings -- so the thing this test guards is
+    # whether the CORE still declares a location_root, and whether this
+    # platform still supplies the value it reads.
+    from contoso_product import silver_dir
+
+    project = (silver_dir() / "dbt_project.yml").read_text(encoding="utf-8")
     assert "+location_root:" in project
     assert "DBT_SILVER_LOCATION_ROOT" in project
+    dag = (pathlib.Path(__file__).resolve().parents[1]
+           / "dags" / "contoso_daily.py").read_text(encoding="utf-8")
+    assert "DBT_SILVER_LOCATION_ROOT" in dag, (
+        "core reads DBT_SILVER_LOCATION_ROOT and this platform no longer "
+        "supplies it -- silver would land where the endpoint cannot see it")
 
 
 def test_bronze_reads_a_debezium_envelope_not_the_envelope_itself():
@@ -197,8 +208,9 @@ def test_every_silver_and_gold_model_publishes_an_asset():
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
     import contoso_daily
 
-    silver = {p.stem for p in
-              (pathlib.Path(contoso_daily.DBT_DIR) / "silver" / "models").glob("*.sql")}
+    from contoso_product import silver_dir
+
+    silver = {p.stem for p in (silver_dir() / "models").glob("*.sql")}
     assert silver, "no silver models found -- the scan proved nothing"
     assert {a.uri for a in contoso_daily.SILVER_ASSETS} == {
         f"contoso://silver/{t}" for t in silver}
