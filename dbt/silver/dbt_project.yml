@@ -4,7 +4,7 @@
 # terminates Livy, the statement agent executes, and Sail does the compute. The
 # Airflow worker holds no Spark session at any point; it submits.
 #
-# This replaces contoso-fabric-platform's Spark notebook with the same transform
+# This replaces fabric-platform-notebook-pipelines's Spark notebook with the same transform
 # expressed declaratively. The notebook could not run on this platform at all --
 # it needs a Fabric notebook item and an engine to publish it to -- but the
 # LOGIC is the sibling's, so the two silvers must agree row for row.

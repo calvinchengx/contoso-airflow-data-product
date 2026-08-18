@@ -4,7 +4,7 @@ THE PRODUCT NEVER LEARNS WHICH TARGET ANSWERED. A DAG says `conn_id="fabric"`;
 the platform provisions that connection against the emulator locally and against
 real Fabric in production, and nothing here branches on which.
 
-This is the same seam `contoso-fabric-platform/platform/target.py` occupies, and
+This is the same seam `fabric-platform-notebook-pipelines/platform/target.py` occupies, and
 its comment states the principle better than a restatement would:
 
     THE GRANT TYPE IS NOT DECIDED HERE, and that is the point. […] The target

@@ -3,7 +3,7 @@
 WHAT DLT OWNS HERE, and it is the hard part: paging, auth, retry, and the
 per-run state that makes a re-run incremental rather than duplicative. What it
 does NOT own is the shape of what lands. The family's rule, from
-`contoso-fabric-platform/platform/ingest_pos.py`:
+`fabric-platform-notebook-pipelines/platform/ingest_pos.py`:
 
     Landed VERBATIM — no parsing, no reshaping. Bronze's job is to be the bytes
     as they arrived, so that a question about the source can be answered
@@ -43,7 +43,7 @@ class Feed:
     ext: str
 
 
-# Exactly the feeds contoso-fabric-platform pulls. Same paths, same extensions,
+# Exactly the feeds fabric-platform-notebook-pipelines pulls. Same paths, same extensions,
 # same landing layout — because `compare_products.py` has to be able to hold
 # both platforms to the same numbers, and a different feed list would make a
 # difference in the totals mean nothing.

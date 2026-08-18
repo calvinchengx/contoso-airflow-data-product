@@ -1,6 +1,6 @@
 # The data product. The ONLY place a platform is mentioned.
 SHELL := /bin/bash
-PLATFORM ?= ../airflow-fabric-platform
+PLATFORM ?= ../fabric-platform-airflow3
 
 .PHONY: help up down run logs test lint
 help: ## This list

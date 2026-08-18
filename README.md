@@ -15,7 +15,7 @@ fabric-emulator here — no compose file, no Dockerfile, no image pin. A platfor
 is `make`'d and pointed at this repo:
 
 ```sh
-make up     # -> ../airflow-fabric-platform, with this directory as the product
+make up     # -> ../fabric-platform-airflow3, with this directory as the product
 make run    # trigger contoso_daily
 ```
 

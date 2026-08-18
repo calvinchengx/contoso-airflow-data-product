@@ -9,7 +9,7 @@ looped on AADSTS50020 for ninety seconds. A misconfigured SDK does not fail
 here — it retargets production.
 
 create → append → flush is three plain HTTP calls. It is the same sequence
-`contoso-fabric-platform/platform/fabric.py:upload()` performs against BOTH
+`fabric-platform-notebook-pipelines/platform/fabric.py:upload()` performs against BOTH
 targets, it has no credential chain to fall through, and the emulator's own
 `e2e/adls-sdk` and `azcopy` witnesses already prove the surface.
 """

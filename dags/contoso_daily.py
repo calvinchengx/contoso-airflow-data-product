@@ -1,6 +1,6 @@
 """The Contoso daily pipeline: four vendors → landing → bronze.
 
-This replaces `contoso-fabric-platform/platform/pipeline.py`, which is a
+This replaces `fabric-platform-notebook-pipelines/platform/pipeline.py`, which is a
 `STEPS = [(name, description), …]` list run in order, stopping at the first
 failure. The steps were always a graph; a list was the only shape available
 without an orchestrator. Here the four vendors genuinely are independent, so
