@@ -738,7 +738,12 @@ wheels = [
 ]
 
 [[package]]
-name = "contoso-airflow-data-product"
+name = "contoso-data-product"
+version = "0.1.1"
+source = { git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.1#cc5b29aa0b00ea160683af03f74f1bcad01a435f" }
+
+[[package]]
+name = "contoso-data-product-fabric-airflow3"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -776,11 +781,6 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14,<0.16" },
 ]
 provides-extras = ["dev"]
-
-[[package]]
-name = "contoso-data-product"
-version = "0.1.1"
-source = { git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.1#cc5b29aa0b00ea160683af03f74f1bcad01a435f" }
 
 [[package]]
 name = "cron-descriptor"

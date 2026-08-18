@@ -1,5 +1,5 @@
 [project]
-name = "contoso-airflow-data-product"
+name = "contoso-data-product-fabric-airflow3"
 version = "0.1.0"
 description = "The Contoso data product for Apache Airflow 3: dlt sources, dbt models, ODCS contracts."
 requires-python = ">=3.12"

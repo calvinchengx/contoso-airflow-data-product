@@ -1,6 +1,6 @@
-# contoso-airflow-data-product
+# contoso-data-product-fabric-airflow3
 
-[![CI](https://github.com/calvinchengx/contoso-airflow-data-product/actions/workflows/ci.yml/badge.svg)](https://github.com/calvinchengx/contoso-airflow-data-product/actions/workflows/ci.yml)
+[![CI](https://github.com/calvinchengx/contoso-data-product-fabric-airflow3/actions/workflows/ci.yml/badge.svg)](https://github.com/calvinchengx/contoso-data-product-fabric-airflow3/actions/workflows/ci.yml)
 [![Airflow 3](https://img.shields.io/badge/Apache_Airflow-3-017CEE?logo=apacheairflow&logoColor=white)](dags/contoso_daily.py)
 [![dlt](https://img.shields.io/badge/dlt-1.30.0-FF6B35)](pyproject.toml)
 [![dbt](https://img.shields.io/badge/dbt-fabricspark_%2B_fabric-FF694B?logo=dbt&logoColor=white)](dbt/)
