@@ -58,6 +58,21 @@ packages = ["src/contoso_airflow"]
 line-length = 100
 target-version = "py312"
 
+[tool.uv]
+# FORCE THE PATCHED sqlparse PAST dbt-core's PIN.
+#
+# Four advisories (three high) land on sqlparse <= 0.5.5 and are fixed only in
+# 0.6.0, which dbt-core 1.12.2 forbids (`sqlparse<0.6.0,>=0.5.5`). uv proves the
+# requirements unsatisfiable without this: every non-yanked dbt-core in
+# >=1.9,<2 carries that bound, so there is no version pair that resolves.
+#
+# An override is not a claim that dbt is fine with 0.6.0 -- it is a claim that
+# has to be TESTED, which is why this landed with a full pipeline run behind it
+# rather than a green lockfile. Remove it the moment dbt-core allows 0.6.0
+# itself; an override that outlives its reason silently pins a dependency
+# nobody is watching.
+override-dependencies = ["sqlparse>=0.6.0"]
+
 [tool.uv.sources]
 # BY GIT TAG, not by sibling path. A path dependency resolves only from a
 # checkout that happens to have both repos side by side -- the worker image

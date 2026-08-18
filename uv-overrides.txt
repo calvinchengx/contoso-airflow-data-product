@@ -1,0 +1,21 @@
+# uv OVERRIDE MANIFEST -- not a dependency list, and not a requirements.txt
+# standing in for pyproject.toml. Dependencies are declared in pyproject.toml;
+# this file exists because an OVERRIDE cannot be expressed there in a form that
+# `uv pip install` reads. `[tool.uv] override-dependencies` governs `uv lock`
+# and `uv sync`, so the lockfile and CI honour it -- but the worker image
+# installs with `uv pip install`, which ignores project config entirely.
+#
+# Measured: with the override only in pyproject.toml, uv.lock resolved
+# sqlparse 0.6.0 and the built worker still ran 0.5.5. A fix that lives only in
+# a lockfile is not deployed.
+#
+# WHY THIS OVERRIDE EXISTS: four advisories (three high -- ReDoS and quadratic
+# DoS in parsing) affect sqlparse <= 0.5.5, fixed only in 0.6.0, which
+# dbt-core 1.12.2 forbids (`sqlparse<0.6.0,>=0.5.5`). There is no 0.5.6 to step
+# to. Forcing it is safe HERE because it was tested, not assumed: dbt's only
+# use of sqlparse is `inject_ctes_into_sql`, exercised directly on a CTE model
+# with a leading comment, plus a full pipeline run.
+#
+# DELETE THIS the moment dbt-core permits 0.6.0 itself. An override that
+# outlives its reason pins a dependency nobody is watching.
+sqlparse>=0.6.0
