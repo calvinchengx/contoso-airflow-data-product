@@ -181,3 +181,53 @@ def test_the_product_names_no_deployment_it_could_be_pointed_at():
     assert not offenders, (
         "these name one deployment and must come from a Connection or the "
         f"environment instead: {offenders}")
+
+
+def test_every_silver_and_gold_model_publishes_an_asset():
+    """The Assets view is a contract, so it must not quietly go stale.
+
+    Cosmos derives its own assets from OpenLineage, which knows `fabric` and
+    not `fabricspark` -- so silver published nothing at all, and gold published
+    URIs embedding `fabric-emulator:1433`. These are declared from the two
+    projects' own model directories instead, so a model added tomorrow
+    publishes an asset tomorrow.
+    """
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
+    import contoso_daily
+
+    silver = {p.stem for p in
+              (pathlib.Path(contoso_daily.DBT_DIR) / "silver" / "models").glob("*.sql")}
+    assert silver, "no silver models found -- the scan proved nothing"
+    assert {a.uri for a in contoso_daily.SILVER_ASSETS} == {
+        f"contoso://silver/{t}" for t in silver}
+
+    assert contoso_daily.GOLD_MODELS, "no gold models found -- the scan proved nothing"
+    assert {a.uri for a in contoso_daily.GOLD_ASSETS} == {
+        f"contoso://gold/{m}" for m in contoso_daily.GOLD_MODELS}
+
+    # Target-neutral, like every other name this repo publishes. Cosmos's own
+    # URIs carry the host and port, so the same models against real Fabric
+    # would publish different asset names and nothing could depend on them.
+    for asset in contoso_daily.SILVER_ASSETS + contoso_daily.GOLD_ASSETS:
+        assert asset.uri.startswith("contoso://"), asset.uri
+        assert "fabric-emulator" not in asset.uri and ":1433" not in asset.uri
+
+
+def test_the_assets_are_emitted_by_the_tasks_that_verify_them():
+    # An asset event should mean "the rows are there", not "a task exited 0".
+    # reflect reads silver over TDS; publish_gold counts the star.
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
+    import contoso_daily
+
+    dag = contoso_daily.contoso_daily()
+    reflect_uris = {a.uri for a in dag.get_task("reflect").outlets}
+    gold_uris = {a.uri for a in dag.get_task("publish_gold").outlets}
+    assert reflect_uris == {a.uri for a in contoso_daily.SILVER_ASSETS}
+    assert gold_uris == {a.uri for a in contoso_daily.GOLD_ASSETS}
+    # publish_gold runs AFTER the gold group, or it would count tables that do
+    # not exist yet.
+    assert any(t.startswith("gold.") for t in dag.get_task("publish_gold").upstream_task_ids)

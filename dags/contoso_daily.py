@@ -21,7 +21,7 @@ for.
 from __future__ import annotations
 
 import pendulum
-from airflow.sdk import Asset, dag, task
+from airflow.sdk import Asset, Metadata, dag, task
 from cosmos import (DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig,
                     RenderConfig)
 from cosmos.constants import TestBehavior
@@ -67,6 +67,25 @@ DBT_BIN = os.environ.get("DBT_EXECUTABLE") or shutil.which("dbt") or "dbt"
 # three other platforms, and changing a shared project to suit one consumer's
 # renderer is the wrong direction. The real value is supplied per run.
 os.environ.setdefault("LAKEHOUSE_ID", "00000000-0000-0000-0000-000000000000")
+
+# THE ASSETS THIS PRODUCT PUBLISHES, declared at PARSE time so they exist in
+# Airflow's Assets view whether or not a run has happened yet, and so another
+# DAG can schedule on one.
+#
+# WE DECLARE THESE OURSELVES rather than take what cosmos derives, for two
+# reasons. Cosmos builds its URIs from OpenLineage, whose dbt processor knows
+# `fabric` and not `fabricspark` -- so silver emits nothing at all
+# (OpenLineage#4874 fixes that upstream). And the URIs it does build for gold
+# embed `fabric-emulator:1433`, a deployment literal this repo has none of
+# anywhere else; the same models against real Fabric would publish different
+# asset names, so nothing downstream could depend on them.
+#
+# The names are read from the projects themselves, so a model added tomorrow
+# publishes an asset tomorrow rather than being quietly absent.
+SILVER_TABLES = sorted(p.stem for p in (DBT_DIR / "silver" / "models").glob("*.sql"))
+GOLD_MODELS = sorted(p.stem for p in (gold_dir() / "models").glob("*.sql"))
+SILVER_ASSETS = [Asset(f"contoso://silver/{t}") for t in SILVER_TABLES]
+GOLD_ASSETS = [Asset(f"contoso://gold/{m}") for m in GOLD_MODELS]
 
 # Which vendor produces which bronze tables. Named here because the mapping is
 # the pipeline's shape, and burying it in four near-identical task bodies is how
@@ -326,8 +345,8 @@ def contoso_daily():
         operator_args={"env": ENV},
     )
 
-    @task
-    def reflect(ctx: dict) -> dict:
+    @task(outlets=SILVER_ASSETS)
+    def reflect(ctx: dict):
         """Gold reads silver over TDS. Prove it can, before gold tries.
 
         THE MODELS ARE THE LIST. Reading the silver project's own directory
@@ -356,9 +375,50 @@ def contoso_daily():
         )
         for table, rows in sorted(counts.items()):
             print(f"silver {table}: {rows} rows visible over TDS", flush=True)
-        return counts
 
-    bronze_done >> env >> silver >> reflect(ctx) >> gold
+        # ONE EVENT PER TABLE, CARRYING ITS COUNT. The event is emitted by the
+        # step that just READ the table over TDS, so "asset produced" means the
+        # rows are there and reachable -- not merely that a task exited 0.
+        for table, rows in sorted(counts.items()):
+            yield Metadata(Asset(f"contoso://silver/{table}"), {"rows": rows})
+        yield counts
+
+    @task(outlets=GOLD_ASSETS)
+    def publish_gold(ctx: dict):
+        """Count every gold model over TDS, and publish one asset each.
+
+        SYMMETRICAL WITH `reflect`, and for the same reason: the task that
+        emits an asset is the task that just READ it. dbt reporting `PASS` says
+        the models built; a count says the star holds rows a consumer can
+        select. Those came apart earlier in this project's life -- eight silver
+        models built green while the lakehouse held none of them.
+
+        Placed after the gold group rather than inside it because cosmos owns
+        those tasks, and giving every model task the same outlets would have
+        each of the nine claim all nine.
+        """
+        from contoso_airflow.target import Target
+        from contoso_airflow.warehouse import connect, endpoint
+
+        host, port = endpoint()
+        conn = connect(Target.from_connection("fabric"), ctx["warehouse_id"], host, port)
+        counts = {}
+        for model in GOLD_MODELS:
+            counts[model] = conn.cursor().execute(
+                f"SELECT COUNT(*) FROM dbo.{model}").fetchone()[0]
+            print(f"gold {model}: {counts[model]} rows", flush=True)
+
+        empty = [m for m, n in counts.items() if n == 0]
+        if empty:
+            # A star with an empty fact is not a built star. Failing here keeps
+            # the asset UNPUBLISHED rather than announcing something hollow.
+            raise ValueError(f"gold models built but hold no rows: {empty}")
+
+        for model, rows in sorted(counts.items()):
+            yield Metadata(Asset(f"contoso://gold/{model}"), {"rows": rows})
+        yield counts
+
+    bronze_done >> env >> silver >> reflect(ctx) >> gold >> publish_gold(ctx)
 
 
 contoso_daily()
