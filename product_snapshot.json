@@ -1,0 +1,14 @@
+{
+  "revenue_usd": "129341157.6700",
+  "cancelled_revenue_usd": "2800504.4000",
+  "sale_lines": "474044",
+  "contracts": [
+    "both_selling_systems_reach_the_pack",
+    "every_country_resolves_to_the_dimension",
+    "fiscal_year_is_not_the_calendar_year",
+    "money_is_never_stored_as_float",
+    "revenue_summary_loses_no_revenue"
+  ],
+  "runtime": "airflow-fabric",
+  "catalog": "80521084-109c-4644-9935-4d4923b6b8c0"
+}

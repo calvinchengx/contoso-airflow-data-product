@@ -1,0 +1,41 @@
+# The product's own tests: no platform, no emulator, no credentials.
+#
+# apache-airflow arrives transitively through astronomer-cosmos, so the DAG
+# shape test and the portability guard both RUN here rather than skipping --
+# which matters, because a test that silently skips in CI is indistinguishable
+# from one that passes.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.12.3"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --extra dev
+      - run: uv run pytest tests -q
+      - run: uv run ruff check .
+      # A SKIPPED TEST IS NOT A PASSING ONE. These tests are the only thing
+      # standing between this repo and a deployment literal creeping back in,
+      # so CI fails if the suite quietly shrinks.
+      - name: no test silently skipped
+        run: |
+          uv run pytest tests -q 2>&1 | tee /tmp/out
+          grep -qE "^[0-9]+ passed" /tmp/out
+          if grep -qE "[0-9]+ skipped" /tmp/out; then
+            echo "::error::a test skipped -- CI must exercise the whole suite"
+            exit 1
+          fi

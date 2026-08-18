@@ -1,5 +1,11 @@
 # contoso-airflow-data-product
 
+[![CI](https://github.com/calvinchengx/contoso-airflow-data-product/actions/workflows/ci.yml/badge.svg)](https://github.com/calvinchengx/contoso-airflow-data-product/actions/workflows/ci.yml)
+[![Airflow 3](https://img.shields.io/badge/Apache_Airflow-3-017CEE?logo=apacheairflow&logoColor=white)](dags/contoso_daily.py)
+[![dlt](https://img.shields.io/badge/dlt-1.30.0-FF6B35)](pyproject.toml)
+[![dbt](https://img.shields.io/badge/dbt-fabricspark_%2B_fabric-FF694B?logo=dbt&logoColor=white)](dbt/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 The Contoso **data product** for Apache Airflow 3: dlt sources that land four
 vendors into a Fabric Lakehouse, dbt models that take bronze to gold, and the
 ODCS contracts that gate every hop.
