@@ -763,7 +763,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "astronomer-cosmos", specifier = ">=1.15,<2" },
-    { name = "contoso-data-product", git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.0" },
+    { name = "contoso-data-product", git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.1" },
     { name = "dbt-core", specifier = ">=1.9,<2" },
     { name = "dbt-fabric", specifier = ">=1.9,<2" },
     { name = "dbt-fabricspark", specifier = ">=1.9,<2" },
@@ -779,8 +779,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "contoso-data-product"
-version = "0.1.0"
-source = { git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.0#ee21cb90a529426c7f7f797e0999a619d4152c27" }
+version = "0.1.1"
+source = { git = "https://github.com/calvinchengx/contoso-data-product.git?tag=v0.1.1#cc5b29aa0b00ea160683af03f74f1bcad01a435f" }
 
 [[package]]
 name = "cron-descriptor"
