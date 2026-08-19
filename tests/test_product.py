@@ -243,3 +243,49 @@ def test_the_assets_are_emitted_by_the_tasks_that_verify_them():
     # publish_gold runs AFTER the gold group, or it would count tables that do
     # not exist yet.
     assert any(t.startswith("gold.") for t in dag.get_task("publish_gold").upstream_task_ids)
+
+
+def test_every_singular_test_in_both_projects_has_a_task_to_run_it(monkeypatch):
+    """A guarantee with no task is not a guarantee, and it fails silently.
+
+    THIS TEST EXISTS BECAUSE IT ALREADY HAPPENED. The silver group passed no
+    `render_config`, so cosmos's default `TestBehavior.AFTER_EACH` applied: one
+    test task per model, and NOTHING for a singular test, which belongs to no
+    model. Silver ships 13 data tests; 12 ran. The thirteenth --
+    `silver_orders_never_holds_a_non_positive_quantity`, the check that the
+    quarantine split does not leak -- was rendered by no task at all, through a
+    green run of this DAG that the plan recorded as evidence.
+
+    Measured rather than reasoned about, in both directions: before the fix the
+    rendered graph held `silver.silver_customers.test` and four siblings and no
+    whole-suite task; after it, one `silver.silver_test`.
+
+    So the check is on the SHAPE THAT MAKES SINGULAR TESTS POSSIBLE -- a
+    whole-suite task per group -- rather than on the config value that produces
+    it today. A future cosmos that renders singular tests some other way should
+    pass this; a group that silently reverts to per-model tests should not.
+    """
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    monkeypatch.setenv("AIRFLOW__COSMOS__ENABLE_CACHE", "False")
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
+    import contoso_daily
+
+    from contoso_product import gold_dir, silver_dir
+
+    dag = contoso_daily.contoso_daily()
+    ids = {t.task_id for t in dag.tasks}
+    for group, project in (("silver", silver_dir()), ("gold", gold_dir())):
+        singular = sorted(p.stem for p in (project / "tests").glob("*.sql"))
+        if not singular:
+            continue
+        assert f"{group}.{group}_test" in ids, (
+            f"{group} ships {len(singular)} singular test(s) -- {singular} -- and "
+            f"the rendered graph has no whole-suite `{group}.{group}_test` task "
+            f"to run them. Per-model test tasks cannot: a singular test is "
+            f"attached to no model. Tasks: {sorted(t for t in ids if t.startswith(group))}"
+        )
+        assert not any(t.endswith(".test") for t in ids if t.startswith(f"{group}.")), (
+            f"{group} renders per-model test tasks alongside the suite task, "
+            f"which is the shape that dropped {singular} before"
+        )

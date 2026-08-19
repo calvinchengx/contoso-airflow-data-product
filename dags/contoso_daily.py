@@ -327,6 +327,28 @@ def contoso_daily():
     silver = DbtTaskGroup(
         group_id="silver",
         project_config=ProjectConfig(dbt_project_path=silver_dir()),
+        # TESTS AFTER ALL MODELS HERE TOO, and this is a CORRECTION.
+        #
+        # This group passed no `render_config` at all, which is not the same as
+        # passing nothing: cosmos's default is `TestBehavior.AFTER_EACH`
+        # (`cosmos/config.py`), and AFTER_EACH renders one test task per model
+        # and evaluates NO SINGULAR TEST -- a singular test is attached to no
+        # model, so a per-model task has nowhere to hang it. The DAG rendered
+        # clean, ran clean, and asserted one guarantee fewer than it appeared
+        # to.
+        #
+        # The comment on gold below used to say AFTER_EACH was "right for
+        # silver, where every test belongs to the one model it follows". That
+        # was TRUE WHEN IT WAS WRITTEN and stopped being true underneath it:
+        # core v0.2.0 moved silver's `accepted_range` off dbt_utils and into
+        # `silver_orders_never_holds_a_non_positive_quantity.sql`, a singular
+        # test -- so silver acquired exactly the kind of test the default
+        # cannot run, and nothing failed to say so.
+        #
+        # That is the shape worth naming: not a wrong decision, but a decision
+        # whose PREMISE expired in another repository, silently, because the
+        # default it relied on fails by omission rather than by error.
+        render_config=RenderConfig(test_behavior=TestBehavior.AFTER_ALL),
         profile_config=ProfileConfig(
             profile_name="contoso_silver", target_name="dev",
             profiles_yml_filepath=DBT_DIR / "silver" / "profiles.yml"),
@@ -342,9 +364,10 @@ def contoso_daily():
     gold = DbtTaskGroup(
         group_id="gold",
         project_config=ProjectConfig(dbt_project_path=gold_dir()),
-        # TESTS AFTER ALL MODELS, and only for gold. Cosmos's default puts a
-        # test task immediately after each model -- right for silver, where
-        # every test belongs to the one model it follows. Gold's suite includes
+        # TESTS AFTER ALL MODELS. Cosmos's default puts a test task immediately
+        # after each model, which drops singular tests on the floor -- see the
+        # silver group above, where relying on that default cost one contract.
+        # Gold's suite includes
         # SINGULAR tests that span the star: `revenue_summary_loses_no_revenue`
         # compares a fact against its summary, `every_country_resolves_to_the
         # _dimension` joins a fact to a dimension. Cosmos attaches such a test
