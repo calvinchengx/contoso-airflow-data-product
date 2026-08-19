@@ -3,6 +3,7 @@
 The runtimes are exercised by the witness; these are about the product's own
 decisions — the ones that would be wrong before anything is stood up.
 """
+import json
 import pathlib
 import sys
 
@@ -289,3 +290,123 @@ def test_every_singular_test_in_both_projects_has_a_task_to_run_it(monkeypatch):
             f"{group} renders per-model test tasks alongside the suite task, "
             f"which is the shape that dropped {singular} before"
         )
+
+
+def _run_results(which, results):
+    return json.dumps({"args": {"which": which}, "results": results})
+
+
+def test_the_snapshot_names_the_contracts_the_run_evaluated(tmp_path):
+    """Not the ones the directory happens to contain.
+
+    THIS IS THE DEFECT THIS CELL PUBLISHED FOR ITS WHOLE LIFE. `contracts` was
+    `glob('gold/tests/*.sql')` -- what the shared project CONTAINS -- written
+    into a snapshot that `compare_products` reads as what this runtime CHECKED.
+    The two agree only when nothing went wrong, which is the single case the
+    field exists for: a cell that ran no contract at all would still name five.
+    """
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    import snapshot
+
+    rr = tmp_path / "run_results.json"
+    rr.write_text(_run_results("test", [
+        {"unique_id": "test.contoso_gold.revenue_summary_loses_no_revenue",
+         "status": "pass"},
+        # A generic test carries a trailing hash; the name is still segment 3.
+        {"unique_id": "test.contoso_gold.not_null_fct_sales_amount.9a1b2c",
+         "status": "pass"},
+    ]), encoding="utf-8")
+
+    contracts, failures = snapshot.verdicts(
+        rr, ["revenue_summary_loses_no_revenue"])
+    assert contracts == ["revenue_summary_loses_no_revenue"]
+    assert failures == []
+
+
+def test_the_snapshot_refuses_a_contract_the_run_never_evaluated(tmp_path):
+    """A name on disk that no test produced must fail, not be published."""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    import snapshot
+
+    rr = tmp_path / "run_results.json"
+    rr.write_text(_run_results("test", [
+        {"unique_id": "test.contoso_gold.revenue_summary_loses_no_revenue",
+         "status": "pass"}]), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="money_is_never_stored_as_float"):
+        snapshot.verdicts(rr, ["money_is_never_stored_as_float",
+                               "revenue_summary_loses_no_revenue"])
+
+
+def test_the_snapshot_refuses_another_command_s_artefact(tmp_path):
+    """`dbt run` overwrites run_results.json, and reports zero failures.
+
+    Believed, that publishes "no contract failures" for a run whose contracts
+    never executed. Here the nine gold model tasks write to the same directory,
+    so this is the ordinary case rather than a corner one.
+    """
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    import snapshot
+
+    rr = tmp_path / "run_results.json"
+    rr.write_text(_run_results("run", [
+        {"unique_id": "model.contoso_gold.fct_sales", "status": "success"}]),
+        encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="dbt run"):
+        snapshot.verdicts(rr, ["revenue_summary_loses_no_revenue"])
+
+
+def test_a_failing_contract_is_recorded_rather_than_hidden(tmp_path):
+    """Recording a measurement and asserting a pass are different acts.
+
+    A cell that refuses to publish anything when a contract fails removes
+    itself from the family comparison, and the family loses its evidence for
+    the defect. So the failure travels WITH the numbers; `compare_products`
+    is what makes it fatal.
+    """
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    import snapshot
+
+    rr = tmp_path / "run_results.json"
+    rr.write_text(_run_results("test", [
+        {"unique_id": "test.contoso_gold.money_is_never_stored_as_float",
+         "status": "fail", "failures": 3, "message": "got 3 float columns"}]),
+        encoding="utf-8")
+
+    contracts, failures = snapshot.verdicts(rr, ["money_is_never_stored_as_float"])
+    assert contracts == ["money_is_never_stored_as_float"]
+    assert failures == [{"contract": "money_is_never_stored_as_float",
+                         "status": "fail", "failures": 3,
+                         "detail": "got 3 float columns"}]
+
+
+def test_gold_writes_its_dbt_artefacts_where_the_snapshot_reads_them(monkeypatch):
+    """The two halves of the fix must agree, and nothing else holds them so.
+
+    The DAG tells gold's dbt where to write `run_results.json`; the snapshot
+    reads it from the same place. They are joined by one env var and a matching
+    default, in two files -- exactly the shape that drifts.
+    """
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    monkeypatch.setenv("AIRFLOW__COSMOS__ENABLE_CACHE", "False")
+    root = pathlib.Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "dags"))
+    sys.path.insert(0, str(root / "scripts"))
+    import contoso_daily
+    import snapshot as snap
+
+    assert "CONTOSO_GOLD_TARGET" in (root / "scripts" / "snapshot.py").read_text(
+        encoding="utf-8"), "the snapshot no longer reads the DAG's target path"
+    assert snap  # imported for the same reason the DAG is: it must parse
+
+    dag = contoso_daily.contoso_daily()
+    gold = dag.get_task("gold.gold_test")
+    assert gold.env["DBT_TARGET_PATH"] == str(contoso_daily.GOLD_TARGET)
+    # SILVER MUST NOT SHARE IT. One directory for both projects would let
+    # silver's `dbt test` artefact be read as gold's verdict -- the same
+    # confusion between two artefacts that `args.which` catches between two
+    # commands.
+    silver = dag.get_task("silver.silver_test")
+    assert "DBT_TARGET_PATH" not in silver.env

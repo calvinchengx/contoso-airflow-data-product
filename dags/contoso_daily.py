@@ -53,6 +53,29 @@ DBT_DIR = pathlib.Path(__file__).resolve().parent.parent / "dbt"
 # working where dbt is absent from the scheduler but present on the worker.
 DBT_BIN = os.environ.get("DBT_EXECUTABLE") or shutil.which("dbt") or "dbt"
 
+# WHERE GOLD'S dbt ARTEFACTS SURVIVE THE TASK THAT WROTE THEM.
+#
+# cosmos clones the project into a temp directory and runs there, so
+# `target/run_results.json` -- the only record of WHICH tests an invocation
+# actually evaluated -- is deleted with the clone. `scripts/snapshot.py` had no
+# way to read it, so it named the contracts by globbing `gold/tests/*.sql`: a
+# list of what the project CONTAINS, published as though it were what the run
+# CHECKED. Those agree only when nothing went wrong, which is precisely the
+# case the field exists for.
+#
+# dbt honours DBT_TARGET_PATH as an absolute path, so the artefacts land
+# somewhere both the task and the snapshot can see. GOLD ONLY: silver's dbt
+# writes its own run_results, and one shared directory would let silver's
+# verdict be read as gold's -- the same confusion between two artefacts that
+# the `args.which` assertion below exists to catch between two commands.
+#
+# The nine model tasks write here too, and race; that is harmless because
+# `gold_test` runs after all of them (TestBehavior.AFTER_ALL) and is therefore
+# the last writer, and because a snapshot that read a model task's artefact by
+# mistake is refused rather than published -- see snapshot.py.
+GOLD_TARGET = pathlib.Path(
+    os.environ.get("CONTOSO_GOLD_TARGET", "/tmp/contoso-gold-target"))
+
 # GOLD'S sources.yml DEMANDS THESE AT PARSE TIME, and not because the shared
 # project is careless. It reads:
 #
@@ -385,7 +408,9 @@ def contoso_daily():
             profile_name="contoso_gold", target_name="dev",
             profiles_yml_filepath=DBT_DIR / "gold" / "profiles.yml"),
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
-        operator_args={"env": ENV},
+        # GOLD'S OWN ENV, not silver's. The extra entry is DBT_TARGET_PATH; see
+        # GOLD_TARGET above for why it is here and why silver does not get it.
+        operator_args={"env": {**ENV, "DBT_TARGET_PATH": str(GOLD_TARGET)}},
     )
 
     @task(outlets=SILVER_ASSETS)
