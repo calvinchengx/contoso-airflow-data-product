@@ -460,3 +460,67 @@ def test_no_dbt_task_emits_an_asset_cosmos_invented(monkeypatch):
     assert not emitting, (
         f"cosmos will emit assets for these tasks at run time; the G37 race is "
         f"live for them: {sorted(emitting)}")
+
+
+def test_the_semantic_task_runs_after_gold_holds_rows(monkeypatch):
+    # The model binds Direct Lake to tables that must ALREADY hold rows. A
+    # model published over an empty star answers 0 rather than failing, which
+    # is the silent-success shape this repo keeps refusing.
+    #
+    # ENABLE_CACHE like every sibling that renders the DAG: without it cosmos
+    # writes an Airflow Variable and the render dies on `no such table:
+    # variable`. That crash is what made the FIRST G37 guard look effective
+    # while asserting nothing -- caught here by reading the failure message
+    # rather than the exit code.
+    monkeypatch.setenv("AIRFLOW__COSMOS__ENABLE_CACHE", "False")
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
+    import contoso_daily
+
+    dag = contoso_daily.contoso_daily()
+    upstream = dag.get_task("semantic_model").upstream_task_ids
+    assert "publish_gold" in upstream, (
+        f"semantic_model must follow publish_gold, has {sorted(upstream)}")
+    assert {a.uri for a in dag.get_task("semantic_model").outlets} == {
+        contoso_daily.SEMANTIC_ASSET.uri}
+
+
+def test_the_semantic_verdict_refuses_disagreement_and_partial_comparison():
+    """The deciding logic, without a warehouse -- the same reason core's
+    verdicts() is its own function.
+
+    A tolerance is deliberately absent: both sides read the same rows of the
+    same run, so a difference is a wrong binding, never float drift.
+    """
+    from decimal import Decimal
+
+    from contoso_airflow import semantic
+
+    exact = {"Revenue USD": Decimal("129341157.67"),
+             "Sale Lines": Decimal("474044")}
+    assert semantic.semantic_verdict(exact, dict(exact)) == {
+        "Revenue USD": "129341157.67", "Sale Lines": "474044"}
+
+    off_by_a_cent = {"Revenue USD": Decimal("129341157.68"),
+                     "Sale Lines": Decimal("474044")}
+    with pytest.raises(semantic.SemanticError, match="disagrees with the gold"):
+        semantic.semantic_verdict(off_by_a_cent, exact)
+
+    with pytest.raises(semantic.SemanticError, match="refusing a partial comparison"):
+        semantic.semantic_verdict({"Revenue USD": Decimal("1")}, exact)
+
+
+def test_the_direct_lake_expression_names_onelake_not_the_control_plane():
+    # Direct Lake reads STORAGE. Building the expression from the control-plane
+    # root unchanged would produce a model that resolves nothing, and the
+    # failure would surface as an empty table rather than a bad URL.
+    import types
+
+    from contoso_airflow import semantic
+
+    target = types.SimpleNamespace(api_root="https://api.fabric.microsoft.com:9443")
+    expr = semantic.direct_lake_expression(target, "WS", "WH")
+    assert "onelake.dfs.fabric.microsoft.com" in expr
+    assert "api.fabric.microsoft.com" not in expr
+    assert expr.endswith("/WS/WH\", [HierarchicalNavigation=true]) in Source")

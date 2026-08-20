@@ -109,6 +109,9 @@ SILVER_TABLES = sorted(p.stem for p in (silver_dir() / "models").glob("*.sql"))
 GOLD_MODELS = sorted(p.stem for p in (gold_dir() / "models").glob("*.sql"))
 SILVER_ASSETS = [Asset(f"contoso://silver/{t}") for t in SILVER_TABLES]
 GOLD_ASSETS = [Asset(f"contoso://gold/{m}") for m in GOLD_MODELS]
+# The BI-facing output. One asset, not one per measure: the model is the
+# artifact a consumer opens, and a measure is a column of it.
+SEMANTIC_ASSET = Asset("contoso://semantic/contoso-analytics")
 
 # Which vendor produces which bronze tables. Named here because the mapping is
 # the pipeline's shape, and burying it in four near-identical task bodies is how
@@ -502,7 +505,55 @@ def contoso_daily():
             yield Metadata(Asset(f"contoso://gold/{model}"), {"rows": rows})
         yield counts
 
-    bronze_done >> env >> silver >> reflect(ctx) >> gold >> publish_gold(ctx)
+    @task(outlets=[SEMANTIC_ASSET])
+    def semantic_model(ctx: dict):
+        """Publish the semantic model over gold, then hold it to gold.
+
+        THE ONE ARTIFACT A BI CONSUMER OPENS. Everything upstream of here is
+        reachable only over SQL; this is the product's outputs in the shape a
+        report actually reads, and until now the family had none.
+
+        AFTER `publish_gold`, not beside it: the model binds Direct Lake to
+        tables that must already hold rows, and a model published over an
+        empty star would answer 0 rather than fail.
+
+        The contract reads gold TWICE -- three sums over TDS, the same three
+        measures over DAX -- and requires exact agreement. Asserting the
+        family's constants here instead would pass while the model was bound
+        to the wrong warehouse; comparing the two paths of the SAME run cannot.
+        """
+        from contoso_airflow import semantic
+        from contoso_airflow.target import Target
+        from contoso_airflow.warehouse import connect, endpoint
+
+        target = Target.from_connection("fabric")
+        dataset = semantic.publish(target, ctx)
+
+        # Gold over SQL: the same three columns snapshot.py sums, read from the
+        # warehouse this run just wrote.
+        host, port = endpoint()
+        conn = connect(target, ctx["warehouse_id"], host, port)
+        row = conn.cursor().execute(
+            "SELECT coalesce(sum(revenue_usd),0), "
+            "coalesce(sum(cancelled_revenue_usd),0), "
+            "coalesce(sum(sale_lines),0) FROM dbo.fct_revenue_summary").fetchone()
+        from contoso_product import semantic as core
+        expected = core.expected_measures({
+            "revenue_usd": row[0],
+            "cancelled_revenue_usd": row[1],
+            "sale_lines": row[2],
+        })
+
+        measured = semantic.evaluate(target, ctx["workspace_id"], dataset)
+        verdict = semantic.semantic_verdict(measured, expected)
+        for name, value in verdict.items():
+            print(f"semantic {name}: {value} (DAX == SQL)", flush=True)
+
+        yield Metadata(SEMANTIC_ASSET,
+                       {"dataset": dataset, **verdict})
+        yield {"dataset": dataset, "measures": verdict}
+
+    bronze_done >> env >> silver >> reflect(ctx) >> gold >> publish_gold(ctx) >> semantic_model(ctx)
 
 
 contoso_daily()
