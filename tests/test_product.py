@@ -511,16 +511,30 @@ def test_the_semantic_verdict_refuses_disagreement_and_partial_comparison():
         semantic.semantic_verdict({"Revenue USD": Decimal("1")}, exact)
 
 
-def test_the_direct_lake_expression_names_onelake_not_the_control_plane():
-    # Direct Lake reads STORAGE. Building the expression from the control-plane
-    # root unchanged would produce a model that resolves nothing, and the
-    # failure would surface as an empty table rather than a bad URL.
-    import types
+def test_the_direct_lake_expression_is_onelakes_canonical_url():
+    """The EXACT string, not "contains onelake" -- and the difference cost a
+    witness.
 
+    The first version of this test asserted the host was present and the
+    control-plane host was not. Both held for
+    `https://onelake.dfs.fabric.microsoft.com:9443/...`, built by rewriting the
+    target's api_root, which drags the emulator's PORT along. Fabric's OneLake
+    URL never has a port, and the emulator matches Fabric exactly: its parser
+    wants the path straight after the host, so the ported form came back
+    `InvalidDataset: shared expression must contain an onelake... URL` -- a
+    message that reads as MISSING rather than malformed.
+
+    Asserting the whole string is what makes this test able to fail.
+    """
     from contoso_airflow import semantic
 
-    target = types.SimpleNamespace(api_root="https://api.fabric.microsoft.com:9443")
-    expr = semantic.direct_lake_expression(target, "WS", "WH")
-    assert "onelake.dfs.fabric.microsoft.com" in expr
-    assert "api.fabric.microsoft.com" not in expr
-    assert expr.endswith("/WS/WH\", [HierarchicalNavigation=true]) in Source")
+    expr = semantic.direct_lake_expression("WS", "WH")
+    assert expr == (
+        'let Source = AzureStorage.DataLake('
+        '"https://onelake.dfs.fabric.microsoft.com/WS/WH", '
+        '[HierarchicalNavigation=true]) in Source'), expr
+    # The emulator's own parser, restated: host then path, no port between.
+    import re
+    assert re.search(
+        r"https://onelake\.dfs\.fabric\.microsoft\.com/([^/\"?]+?)/([^/\"?]+)",
+        expr), "the emulator's Direct Lake regex would not match this"

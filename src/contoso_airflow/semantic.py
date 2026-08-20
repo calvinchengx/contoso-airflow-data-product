@@ -59,18 +59,29 @@ def _request(url: str, token: str, *, method: str = "GET",
             f"{method} {url} -> {e.code}: {e.read()[:300]!r}") from e
 
 
-def direct_lake_expression(target: Target, workspace_id: str,
-                           warehouse_id: str) -> str:
+# OneLake's canonical address. NOT derived from the target's api_root, and
+# that distinction cost a witness: rewriting the control-plane host carries its
+# PORT along (`onelake.dfs...:9443`), and a Direct Lake expression on real
+# Fabric never has one. The emulator matches Fabric here exactly -- its parser
+# wants `https://onelake.dfs.fabric.microsoft.com/<ws>/<item>` with the path
+# straight after the host -- so the ported form was refused as
+# `InvalidDataset: shared expression must contain an onelake... URL`, which
+# reads as a missing URL rather than a malformed one.
+#
+# Written as a constant because it IS constant: the same string deploys against
+# the emulator and against a real tenant. Only the ids after it change.
+ONELAKE_ROOT = "https://onelake.dfs.fabric.microsoft.com"
+
+
+def direct_lake_expression(workspace_id: str, warehouse_id: str) -> str:
     """The M expression naming where this run's warehouse lives.
 
-    Built here rather than in core: it carries the OneLake host, which core is
-    forbidden to name (`test_no_engine_named_in_core`). The shape is Fabric's
-    own — the same expression a Desktop-authored Direct Lake model carries.
+    Built here rather than in core: it names a host, which core is forbidden
+    to do (`test_no_engine_named_in_core`). The shape is Fabric's own — the
+    same expression a Desktop-authored Direct Lake model carries.
     """
-    onelake = target.api_root.replace("api.fabric.microsoft.com",
-                                      "onelake.dfs.fabric.microsoft.com")
     return (f'let Source = AzureStorage.DataLake('
-            f'"{onelake}/{workspace_id}/{warehouse_id}", '
+            f'"{ONELAKE_ROOT}/{workspace_id}/{warehouse_id}", '
             f'[HierarchicalNavigation=true]) in Source')
 
 
@@ -82,7 +93,7 @@ def publish(target: Target, ctx: dict) -> str:
     carrying half of each, and this product's items are disposable by design.
     """
     expression = direct_lake_expression(
-        target, ctx["workspace_id"], ctx["warehouse_id"])
+        ctx["workspace_id"], ctx["warehouse_id"])
     bim = core.model_bim(expression, GOLD_SCHEMA, model_name=MODEL_NAME)
     payload = base64.b64encode(json.dumps(bim).encode()).decode()
     token = target.fabric_token()
