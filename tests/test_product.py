@@ -410,3 +410,36 @@ def test_gold_writes_its_dbt_artefacts_where_the_snapshot_reads_them(monkeypatch
     # commands.
     silver = dag.get_task("silver.silver_test")
     assert "DBT_TARGET_PATH" not in silver.env
+
+
+def test_no_dbt_task_emits_an_asset_cosmos_invented():
+    """Every asset this DAG publishes is declared by name at the top of the
+    file and emitted by a task that VERIFIED the rows -- reflect and
+    publish_gold. Cosmos must emit none.
+
+    THIS TEST EXISTS BECAUSE IT ALREADY HAPPENED (G37). With emission left on,
+    cosmos gave three concurrent gold model tasks the SAME outlet --
+    `dbo/fct_orders`, claimed six times in one run's log -- and they raced to
+    register it. Airflow flipped the losers to failed AFTER their own dbt
+    reported PASS=1 ERROR=0, so a task that did its work was recorded failed,
+    one run in two, on a graph whose whole purpose is to be compared against
+    another graph. Nothing could see it until `make verify` ran the pipeline
+    twice.
+
+    The assertion is the SHAPE -- no dbt-rendered task carries outlets -- not
+    the config value producing it today, so a fourth DbtTaskGroup added
+    without `emit_datasets=False` fails here rather than intermittently in a
+    witness run.
+    """
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
+    import contoso_daily
+
+    dag = contoso_daily.contoso_daily()
+    dbt_tasks = [t for t in dag.tasks
+                 if t.task_id.startswith(("silver.", "gold."))]
+    assert dbt_tasks, "no dbt tasks rendered -- the scan proved nothing"
+    offenders = {t.task_id: [a.uri for a in t.outlets] for t in dbt_tasks if t.outlets}
+    assert not offenders, (
+        f"cosmos is emitting assets again; the G37 race is live: {offenders}")

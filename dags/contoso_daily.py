@@ -371,7 +371,20 @@ def contoso_daily():
         # That is the shape worth naming: not a wrong decision, but a decision
         # whose PREMISE expired in another repository, silently, because the
         # default it relied on fails by omission rather than by error.
-        render_config=RenderConfig(test_behavior=TestBehavior.AFTER_ALL),
+        # NO ASSET EMISSION FROM COSMOS, here or on gold below (G37). This DAG
+        # declares its own target-neutral assets (`contoso://…`), emitted by
+        # the tasks that VERIFY rows exist -- `reflect` and `publish_gold` --
+        # so cosmos's per-model emission is redundant. It is also broken for
+        # this graph: cosmos assigned three concurrent gold model tasks the
+        # SAME outlet (`dbo/fct_orders`, claimed six times in one run's log),
+        # they raced to register it, and Airflow flipped the losers to failed
+        # AFTER their own dbt reported PASS -- a task recorded failed whose
+        # payload says SUCCESS, one run in two. Cosmos's URIs are additionally
+        # wrong for this repo on their own terms: they embed the emulator's
+        # host and port, so the same models against real Fabric would publish
+        # different asset names (the test asserting that predates this fix).
+        render_config=RenderConfig(test_behavior=TestBehavior.AFTER_ALL,
+                                   emit_datasets=False),
         profile_config=ProfileConfig(
             profile_name="contoso_silver", target_name="dev",
             profiles_yml_filepath=DBT_DIR / "silver" / "profiles.yml"),
@@ -403,7 +416,10 @@ def contoso_daily():
         # The cost is honest: gold's 67 tests become one task rather than one
         # per model, so a single failure no longer isolates itself. That is the
         # right trade only because the alternative is tests that cannot pass.
-        render_config=RenderConfig(test_behavior=TestBehavior.AFTER_ALL),
+        # emit_datasets=False: see the silver group -- G37 was measured on THIS
+        # group's fct_orders outlet.
+        render_config=RenderConfig(test_behavior=TestBehavior.AFTER_ALL,
+                                   emit_datasets=False),
         profile_config=ProfileConfig(
             profile_name="contoso_gold", target_name="dev",
             profiles_yml_filepath=DBT_DIR / "gold" / "profiles.yml"),
