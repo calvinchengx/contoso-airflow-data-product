@@ -152,15 +152,31 @@ def evaluate(target: Target, workspace_id: str, dataset_id: str) -> dict[str, De
     return got
 
 
+# The scale the warehouse stores money at. Both sides are quantized to it
+# before comparison, and then required EXACTLY equal.
+#
+# THE FIRST VERSION OF THIS REFUSED ANY DIFFERENCE AT ALL, on the reasoning
+# that both sides read the same rows so a difference must be a wrong binding
+# "never accumulated float error". The witness falsified that in one line:
+#
+#   dax 129341157.67000003   sql 129341157.6700
+#
+# DAX arrives over JSON as an IEEE754 double and the evaluator sums in float64
+# whatever the column declares, while TDS returns the warehouse's DECIMAL. The
+# two paths therefore CANNOT agree bit-for-bit on money, and a comparison that
+# demands it is asserting a property of the transport rather than of the data.
+#
+# Quantizing is not a tolerance for hiding defects: a wrong binding, a stale
+# entity or a dropped filter moves money by cents or millions, never by 3e-8.
+# What it does concede is that a real defect smaller than the warehouse's own
+# storage scale would pass -- which is the same thing the warehouse concedes by
+# storing at that scale.
+MONEY_SCALE = Decimal("0.0001")
+
+
 def semantic_verdict(measured: dict[str, Decimal],
                      expected: dict[str, Decimal]) -> dict:
-    """Compare DAX against SQL, and refuse anything but exact agreement.
-
-    Exact, not tolerant: both sides read the same Delta/SQL rows of the same
-    run, so a difference is a wrong binding or a wrong measure, never
-    accumulated float error. `revenue_usd` is money and the snapshot carries
-    it fixed-point; a tolerance here would be a place for a real defect to
-    hide.
+    """Compare DAX against SQL at the scale the warehouse stores.
 
     Separated from `evaluate` so the deciding logic is testable without a
     warehouse — the same reason core's `verdicts()` is its own function.
@@ -169,10 +185,16 @@ def semantic_verdict(measured: dict[str, Decimal],
         raise SemanticError(
             f"measures answered {sorted(measured)} but gold offers "
             f"{sorted(expected)}; refusing a partial comparison")
-    disagreed = {name: {"dax": str(measured[name]), "sql": str(expected[name])}
-                 for name in expected if measured[name] != expected[name]}
+    disagreed = {}
+    for name in expected:
+        dax = measured[name].quantize(MONEY_SCALE)
+        sql = expected[name].quantize(MONEY_SCALE)
+        if dax != sql:
+            disagreed[name] = {"dax": str(dax), "sql": str(sql),
+                               "raw_dax": str(measured[name])}
     if disagreed:
         raise SemanticError(
             f"the semantic model disagrees with the gold it is bound to: "
             f"{json.dumps(disagreed, indent=2)}")
-    return {name: str(v) for name, v in sorted(measured.items())}
+    return {name: str(v.quantize(MONEY_SCALE))
+            for name, v in sorted(measured.items())}

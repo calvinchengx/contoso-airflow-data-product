@@ -500,8 +500,18 @@ def test_the_semantic_verdict_refuses_disagreement_and_partial_comparison():
     exact = {"Revenue USD": Decimal("129341157.67"),
              "Sale Lines": Decimal("474044")}
     assert semantic.semantic_verdict(exact, dict(exact)) == {
-        "Revenue USD": "129341157.67", "Sale Lines": "474044"}
+        "Revenue USD": "129341157.6700", "Sale Lines": "474044.0000"}
 
+    # FLOAT NOISE MUST PASS, and this is the case the witness produced: DAX
+    # comes over JSON as an IEEE754 double and the evaluator sums in float64,
+    # so the two paths cannot agree bit-for-bit on money. Demanding they do
+    # asserts a property of the transport, not of the data.
+    float_noise = {"Revenue USD": Decimal("129341157.67000003"),
+                   "Sale Lines": Decimal("474044")}
+    assert semantic.semantic_verdict(float_noise, exact)["Revenue USD"] == "129341157.6700"
+
+    # A CENT MUST STILL FAIL. Quantizing is not a tolerance for hiding
+    # defects: a wrong binding moves money by cents or millions, never 3e-8.
     off_by_a_cent = {"Revenue USD": Decimal("129341157.68"),
                      "Sale Lines": Decimal("474044")}
     with pytest.raises(semantic.SemanticError, match="disagrees with the gold"):
