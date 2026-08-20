@@ -460,3 +460,91 @@ def test_no_dbt_task_emits_an_asset_cosmos_invented(monkeypatch):
     assert not emitting, (
         f"cosmos will emit assets for these tasks at run time; the G37 race is "
         f"live for them: {sorted(emitting)}")
+
+
+def test_the_semantic_task_runs_after_gold_holds_rows(monkeypatch):
+    # The model binds Direct Lake to tables that must ALREADY hold rows. A
+    # model published over an empty star answers 0 rather than failing, which
+    # is the silent-success shape this repo keeps refusing.
+    #
+    # ENABLE_CACHE like every sibling that renders the DAG: without it cosmos
+    # writes an Airflow Variable and the render dies on `no such table:
+    # variable`. That crash is what made the FIRST G37 guard look effective
+    # while asserting nothing -- caught here by reading the failure message
+    # rather than the exit code.
+    monkeypatch.setenv("AIRFLOW__COSMOS__ENABLE_CACHE", "False")
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
+    import contoso_daily
+
+    dag = contoso_daily.contoso_daily()
+    upstream = dag.get_task("semantic_model").upstream_task_ids
+    assert "publish_gold" in upstream, (
+        f"semantic_model must follow publish_gold, has {sorted(upstream)}")
+    assert {a.uri for a in dag.get_task("semantic_model").outlets} == {
+        contoso_daily.SEMANTIC_ASSET.uri}
+
+
+def test_the_semantic_verdict_refuses_disagreement_and_partial_comparison():
+    """The deciding logic, without a warehouse -- the same reason core's
+    verdicts() is its own function.
+
+    A tolerance is deliberately absent: both sides read the same rows of the
+    same run, so a difference is a wrong binding, never float drift.
+    """
+    from decimal import Decimal
+
+    from contoso_airflow import semantic
+
+    exact = {"Revenue USD": Decimal("129341157.67"),
+             "Sale Lines": Decimal("474044")}
+    assert semantic.semantic_verdict(exact, dict(exact)) == {
+        "Revenue USD": "129341157.6700", "Sale Lines": "474044.0000"}
+
+    # FLOAT NOISE MUST PASS, and this is the case the witness produced: DAX
+    # comes over JSON as an IEEE754 double and the evaluator sums in float64,
+    # so the two paths cannot agree bit-for-bit on money. Demanding they do
+    # asserts a property of the transport, not of the data.
+    float_noise = {"Revenue USD": Decimal("129341157.67000003"),
+                   "Sale Lines": Decimal("474044")}
+    assert semantic.semantic_verdict(float_noise, exact)["Revenue USD"] == "129341157.6700"
+
+    # A CENT MUST STILL FAIL. Quantizing is not a tolerance for hiding
+    # defects: a wrong binding moves money by cents or millions, never 3e-8.
+    off_by_a_cent = {"Revenue USD": Decimal("129341157.68"),
+                     "Sale Lines": Decimal("474044")}
+    with pytest.raises(semantic.SemanticError, match="disagrees with the gold"):
+        semantic.semantic_verdict(off_by_a_cent, exact)
+
+    with pytest.raises(semantic.SemanticError, match="refusing a partial comparison"):
+        semantic.semantic_verdict({"Revenue USD": Decimal("1")}, exact)
+
+
+def test_the_direct_lake_expression_is_onelakes_canonical_url():
+    """The EXACT string, not "contains onelake" -- and the difference cost a
+    witness.
+
+    The first version of this test asserted the host was present and the
+    control-plane host was not. Both held for
+    `https://onelake.dfs.fabric.microsoft.com:9443/...`, built by rewriting the
+    target's api_root, which drags the emulator's PORT along. Fabric's OneLake
+    URL never has a port, and the emulator matches Fabric exactly: its parser
+    wants the path straight after the host, so the ported form came back
+    `InvalidDataset: shared expression must contain an onelake... URL` -- a
+    message that reads as MISSING rather than malformed.
+
+    Asserting the whole string is what makes this test able to fail.
+    """
+    from contoso_airflow import semantic
+
+    expr = semantic.direct_lake_expression("WS", "WH")
+    assert expr == (
+        'let Source = AzureStorage.DataLake('
+        '"https://onelake.dfs.fabric.microsoft.com/WS/WH", '
+        '[HierarchicalNavigation=true]) in Source'), expr
+    # The emulator's own parser, restated: host then path, no port between.
+    import re
+    assert re.search(
+        r"https://onelake\.dfs\.fabric\.microsoft\.com/([^/\"?]+?)/([^/\"?]+)",
+        expr), "the emulator's Direct Lake regex would not match this"
