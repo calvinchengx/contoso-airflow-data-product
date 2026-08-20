@@ -548,3 +548,21 @@ def test_the_direct_lake_expression_is_onelakes_canonical_url():
     assert re.search(
         r"https://onelake\.dfs\.fabric\.microsoft\.com/([^/\"?]+?)/([^/\"?]+)",
         expr), "the emulator's Direct Lake regex would not match this"
+
+
+def test_the_readme_inventory_matches_the_pinned_core():
+    """The README's product list must be what this leaf's pin actually contains.
+
+    A generated list that falls behind is worse than none: a reader trusts it
+    BECAUSE it looks generated. The check lives in the core so all seven leaves
+    ask the same question of their own pin, and it fails here, in the repository
+    that has to fix it.
+
+    Regenerate with:  python -m contoso_product.show --markdown
+    """
+    from pathlib import Path
+
+    from contoso_product import show
+
+    ok, message = show.check(Path(__file__).resolve().parent.parent / "README.md")
+    assert ok, message

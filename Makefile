@@ -18,6 +18,9 @@ logs: ## Follow the platform's Airflow logs
 run: ## Trigger contoso_daily and wait for it
 	$(MAKE) -C $(PLATFORM) trigger DAG=contoso_daily
 
+show-product: ## Stage the core product's SQL locally and list what it contains
+	@uv run python -m contoso_product.show --into product
+
 test: ## Product unit tests -- no platform, no emulator, no credentials
 	uv run --extra dev pytest tests -q
 
