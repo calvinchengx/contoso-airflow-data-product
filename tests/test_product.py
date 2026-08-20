@@ -412,7 +412,7 @@ def test_gold_writes_its_dbt_artefacts_where_the_snapshot_reads_them(monkeypatch
     assert "DBT_TARGET_PATH" not in silver.env
 
 
-def test_no_dbt_task_emits_an_asset_cosmos_invented():
+def test_no_dbt_task_emits_an_asset_cosmos_invented(monkeypatch):
     """Every asset this DAG publishes is declared by name at the top of the
     file and emitted by a task that VERIFIED the rows -- reflect and
     publish_gold. Cosmos must emit none.
@@ -426,13 +426,29 @@ def test_no_dbt_task_emits_an_asset_cosmos_invented():
     another graph. Nothing could see it until `make verify` ran the pipeline
     twice.
 
-    The assertion is the SHAPE -- no dbt-rendered task carries outlets -- not
-    the config value producing it today, so a fourth DbtTaskGroup added
-    without `emit_datasets=False` fails here rather than intermittently in a
-    witness run.
+    IT ASSERTS `emit_datasets`, NOT `outlets`, AND THE FIRST VERSION OF THIS
+    TEST HAD THAT WRONG. Cosmos's own parameter doc says emission happens
+    "during task execution": a rendered task carries NO outlets either way, so
+    `assert not task.outlets` passes identically with emission on and off and
+    could never catch this. Measured rather than reasoned about -- the pre-fix
+    DAG renders 0 outlets, exactly as the fixed one does.
+
+    What made the earlier version look like it worked is worse than a false
+    pass. With the flag removed it DID fail -- but with
+    `sqlite3.OperationalError: no such table: variable`, because emission-on
+    sends cosmos through its Variable cache and the test omitted the
+    `AIRFLOW__COSMOS__ENABLE_CACHE` monkeypatch its siblings set. A crash in
+    the right direction reads exactly like a working guard. The monkeypatch
+    below removes the crash, so what remains is an assertion or nothing.
+
+    `emit_datasets` IS observable on the rendered operator, and it is the value
+    the task will actually use at run time. Checked in both directions: every
+    task False as written, and `False, True` with the knob removed.
     """
     pytest.importorskip("airflow.sdk")
     pytest.importorskip("cosmos")
+    # Hermetic, like every other render in this file: no metadata database.
+    monkeypatch.setenv("AIRFLOW__COSMOS__ENABLE_CACHE", "False")
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
     import contoso_daily
 
@@ -440,6 +456,7 @@ def test_no_dbt_task_emits_an_asset_cosmos_invented():
     dbt_tasks = [t for t in dag.tasks
                  if t.task_id.startswith(("silver.", "gold."))]
     assert dbt_tasks, "no dbt tasks rendered -- the scan proved nothing"
-    offenders = {t.task_id: [a.uri for a in t.outlets] for t in dbt_tasks if t.outlets}
-    assert not offenders, (
-        f"cosmos is emitting assets again; the G37 race is live: {offenders}")
+    emitting = {t.task_id for t in dbt_tasks if getattr(t, "emit_datasets", True)}
+    assert not emitting, (
+        f"cosmos will emit assets for these tasks at run time; the G37 race is "
+        f"live for them: {sorted(emitting)}")
