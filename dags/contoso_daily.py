@@ -76,20 +76,20 @@ DBT_BIN = os.environ.get("DBT_EXECUTABLE") or shutil.which("dbt") or "dbt"
 GOLD_TARGET = pathlib.Path(
     os.environ.get("CONTOSO_GOLD_TARGET", "/tmp/contoso-gold-target"))
 
-# GOLD'S sources.yml DEMANDS THESE AT PARSE TIME, and not because the shared
-# project is careless. It reads:
+# GOLD'S sources.yml DEMANDS THIS AT PARSE TIME. It reads
+# `env_var('DBT_SILVER_DATABASE')`, and Cosmos renders by running `dbt ls`, so
+# an unset value stops the DAG appearing at all. The real value is supplied per
+# run; this only has to exist.
 #
-#     database: "{{ env_var('CONTOSO_SILVER_DATABASE', env_var('LAKEHOUSE_ID')) }}"
-#
-# The outer call has a fallback, but the fallback is ITSELF an env_var with no
-# default, and Jinja evaluates it eagerly -- so LAKEHOUSE_ID is required even
-# when CONTOSO_SILVER_DATABASE is set. Cosmos renders by running `dbt ls`, so an
-# unset value stops the DAG appearing at all.
-#
-# Satisfied here rather than fixed there: contoso-data-product is consumed by
-# three other platforms, and changing a shared project to suit one consumer's
-# renderer is the wrong direction. The real value is supplied per run.
-os.environ.setdefault("LAKEHOUSE_ID", "00000000-0000-0000-0000-000000000000")
+# IT WAS FIXED THERE AFTER ALL. This used to set LAKEHOUSE_ID, because gold's
+# default was `env_var('CONTOSO_SILVER_DATABASE', env_var('LAKEHOUSE_ID'))` and
+# Jinja evaluates a default EAGERLY, so the Fabric-only fallback was required on
+# every engine. The comment here argued that changing a shared project to suit
+# one consumer's renderer was the wrong direction -- sound reasoning from a
+# false premise, because the nesting was a defect in the project rather than a
+# quirk of Cosmos. Core v0.6.0 removed it and moved the names, since Snowflake's
+# dbt Projects refuse any key that is not UPPERCASE and DBT_-prefixed.
+os.environ.setdefault("DBT_SILVER_DATABASE", "00000000-0000-0000-0000-000000000000")
 
 # THE ASSETS THIS PRODUCT PUBLISHES, declared at PARSE time so they exist in
 # Airflow's Assets view whether or not a run has happened yet, and so another
@@ -301,12 +301,19 @@ def contoso_daily():
             # Gold BUILDS in the warehouse and READS the lakehouse endpoint;
             # two databases on the one TDS endpoint, joined by three-part name.
             "DBT_DATABASE": ctx["warehouse_id"],
-            "LAKEHOUSE_ID": ctx["lakehouse_id"],
-            "CONTOSO_SILVER_DATABASE": ctx["lakehouse_id"],
+            # DBT_-PREFIXED SINCE CORE v0.6.0. Snowflake's dbt Projects refuse
+            # any env var key that is not UPPERCASE and DBT_-prefixed, so the
+            # old names could not be supplied there at all -- gold ran on every
+            # engine in this family except that one. LAKEHOUSE_ID is no longer
+            # passed for dbt: it was read only because gold's default was
+            # `env_var('CONTOSO_SILVER_DATABASE', env_var('LAKEHOUSE_ID'))` and
+            # Jinja evaluates a default EAGERLY. Fabric's own LAKEHOUSE_ID,
+            # which notebookutils reads, is a different thing and untouched.
+            "DBT_SILVER_DATABASE": ctx["lakehouse_id"],
             # `dbo`, not the Spark database name: the endpoint reflects
             # OneLake `Tables/` into dbo regardless of the catalog namespace
             # Spark wrote under. Measured, not assumed.
-            "CONTOSO_SILVER_SCHEMA": os.environ.get("CONTOSO_SILVER_SCHEMA", "dbo"),
+            "DBT_SILVER_SCHEMA": os.environ.get("DBT_SILVER_SCHEMA", "dbo"),
         }
 
     ctx = provision()
@@ -335,8 +342,8 @@ def contoso_daily():
         "DBT_WORKSPACE_ID", "DBT_LAKEHOUSE_ID", "DBT_LAKEHOUSE_NAME",
         "DBT_BRONZE_SCHEMA",
         "DBT_SILVER_LOCATION_ROOT", "DBT_HOST", "DBT_PORT",
-        "DBT_DATABASE", "LAKEHOUSE_ID", "CONTOSO_SILVER_DATABASE",
-        "CONTOSO_SILVER_SCHEMA")}
+        "DBT_DATABASE", "DBT_SILVER_DATABASE",
+        "DBT_SILVER_SCHEMA")}
 
     # SILVER'S MODELS ARE NOT IN THIS REPO EITHER, as of core v0.2.0.
     # contoso-data-product ships them -- 8 models, a conform macro, a singular
