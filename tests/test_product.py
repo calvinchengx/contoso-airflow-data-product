@@ -119,6 +119,29 @@ def test_silver_is_written_where_the_lakehouse_can_see_it():
         "supplies it -- silver would land where the endpoint cannot see it")
 
 
+def test_the_verifier_reads_silver_under_the_key_gold_writes_under():
+    # THE REFLECT STEP CHECKS WHAT GOLD IS ABOUT TO READ, so it has to resolve
+    # its schema from the same environment key the DAG hands dbt. When the core
+    # renamed CONTOSO_SILVER_* to DBT_SILVER_*, the dbt side moved and this one
+    # did not. Both defaulted to `dbo`, so every test stayed green: the split
+    # was reachable only by setting one of the two, and then the verifier would
+    # count rows in a schema nothing had written to and report that count as
+    # silver's. The bug was invisible precisely because nothing exercised the
+    # override -- so assert the keys agree by reading them, not by running.
+    import re
+
+    dag = (pathlib.Path(__file__).resolve().parents[1]
+           / "dags" / "contoso_daily.py").read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in dag.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    keys = set(re.findall(r"environ\.get\(\s*[\"']([A-Z_]*SILVER_SCHEMA)[\"']", code))
+    keys |= set(re.findall(r"[\"']([A-Z_]*SILVER_SCHEMA)[\"']\s*:", code))
+    assert keys, "no silver-schema key found -- this test has stopped looking"
+    assert keys == {"DBT_SILVER_SCHEMA"}, (
+        f"silver's schema is resolved under more than one name: {sorted(keys)} "
+        "-- the writer and the verifier agree only while both are unset")
+
+
 def test_bronze_reads_a_debezium_envelope_not_the_envelope_itself():
     # Parsing these as plain JSON Lines would land envelopes and lose every
     # operation inside them -- green, and describing nothing.
@@ -195,7 +218,7 @@ def test_the_product_names_no_deployment_it_could_be_pointed_at():
         f"environment instead: {offenders}")
 
 
-def test_every_silver_and_gold_model_publishes_an_asset():
+def test_every_silver_and_gold_model_publishes_an_asset(monkeypatch):
     """The Assets view is a contract, so it must not quietly go stale.
 
     Cosmos derives its own assets from OpenLineage, which knows `fabric` and
@@ -206,6 +229,12 @@ def test_every_silver_and_gold_model_publishes_an_asset():
     """
     pytest.importorskip("airflow.sdk")
     pytest.importorskip("cosmos")
+    # Every sibling that imports the DAG sets this; this one did not, so it
+    # passed only when a sibling had already run and left the variable set.
+    # Alone -- `pytest -k`, a rerun of one failure, a shard -- it died on a
+    # missing metadata database, which reads as the DAG being broken rather
+    # than the test being unable to stand up on its own.
+    monkeypatch.setenv("AIRFLOW__COSMOS__ENABLE_CACHE", "False")
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "dags"))
     import contoso_daily
 
