@@ -465,7 +465,12 @@ def contoso_daily():
             host=host,
             port=port,
             expect=expect,
-            schema=os.environ.get("CONTOSO_SILVER_SCHEMA", "dbo"),
+            # THE SAME VARIABLE GOLD WRITES UNDER. This step reflects silver
+            # over TDS to verify what gold is about to read; if it resolved its
+            # schema from a different key than the one passed to dbt, the two
+            # would agree only while both were unset. It would then check a
+            # schema nobody wrote to and report the count it found there.
+            schema=os.environ.get("DBT_SILVER_SCHEMA", "dbo"),
         )
         for table, rows in sorted(counts.items()):
             print(f"silver {table}: {rows} rows visible over TDS", flush=True)
