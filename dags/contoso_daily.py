@@ -565,7 +565,36 @@ def contoso_daily():
                        {"dataset": dataset, **verdict})
         yield {"dataset": dataset, "measures": verdict}
 
-    bronze_done >> env >> silver >> reflect(ctx) >> gold >> publish_gold(ctx) >> semantic_model(ctx)
+    @task
+    def publish(ctx: dict):
+        """Write this run's numbers where the family can read them.
+
+        THE CELL COULD NOT BE HELD TO ANYTHING WITHOUT THIS. `scripts/snapshot.py`
+        existed and was only ever run by hand, so every unattended run of this
+        DAG proved a pipeline executed and published no figure anyone could
+        check -- G50, and worse here than in the sibling cells, which at least
+        wrote a snapshot nobody read.
+
+        LAST, and after `semantic_model` rather than beside it. The semantic
+        contract reads gold twice and holds DAX to SQL; publishing before that
+        would put a number on record that the run had not finished checking.
+
+        The connection is opened here and handed to `build`, so the aggregates
+        come from the warehouse THIS run wrote rather than from whichever one an
+        environment variable happens to name.
+        """
+        from contoso_airflow import snapshot as snap
+        from contoso_airflow.target import Target
+        from contoso_airflow.warehouse import connect, endpoint
+
+        host, port = endpoint()
+        conn = connect(Target.from_connection("fabric"), ctx["warehouse_id"], host, port)
+        payload = snap.build(conn, ctx["warehouse_id"])
+        out = snap.write(payload)
+        print(f"published {out}: {payload}", flush=True)
+        return payload
+
+    bronze_done >> env >> silver >> reflect(ctx) >> gold >> publish_gold(ctx) >> semantic_model(ctx) >> publish(ctx)
 
 
 contoso_daily()
