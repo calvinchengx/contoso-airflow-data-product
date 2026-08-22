@@ -74,13 +74,17 @@ target-version = "py312"
 override-dependencies = ["sqlparse>=0.6.0"]
 
 [tool.uv.sources]
-# BY GIT TAG, not by sibling path. A path dependency resolves only from a
+# BY RELEASE WHEEL, not by sibling path. A path dependency resolves only from a
 # checkout that happens to have both repos side by side -- the worker image
 # receives this product's directory and nothing else, so `../contoso-data-product`
 # is `Distribution not found` at build time. It would also make the platform
 # product-specific: to support it, the platform's Dockerfile would have to know
 # which siblings to copy.
 #
-# A tag is what production would pin regardless, so this is the honest form
-# rather than a workaround for the container.
-contoso-data-product = { git = "https://github.com/calvinchengx/contoso-data-product.git", tag = "v0.6.0" }
+# A wheel rather than a git tag, and the reason is the family, not this leaf.
+# This was the one leaf of seven pinned by tag, and a sweep that moved every
+# pin by editing the wheel URL changed nothing here and was caught only
+# because a DAG-shape test renders gold through `dbt ls` and failed on an
+# env var the old core required. One pin form means one sweep, one grep and
+# one gate; the wheel is also what the other six pin and what production pins.
+contoso-data-product = { url = "https://github.com/calvinchengx/contoso-data-product/releases/download/v0.6.0/contoso_data_product-0.6.0-py3-none-any.whl" }
