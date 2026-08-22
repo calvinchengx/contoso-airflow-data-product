@@ -426,9 +426,20 @@ def test_gold_writes_its_dbt_artefacts_where_the_snapshot_reads_them(monkeypatch
     import contoso_daily
     import snapshot as snap
 
-    assert "CONTOSO_GOLD_TARGET" in (root / "scripts" / "snapshot.py").read_text(
-        encoding="utf-8"), "the snapshot no longer reads the DAG's target path"
-    assert snap  # imported for the same reason the DAG is: it must parse
+    # THE JOIN, ASSERTED RATHER THAN GREPPED. This used to look for the string
+    # "CONTOSO_GOLD_TARGET" in the script, which passed while the two defaults
+    # disagreed. Compare the values instead: the DAG's target path and the one
+    # the snapshot reads are one env var and one matching default in two files.
+    from contoso_airflow import snapshot as core_snap
+
+    assert core_snap.GOLD_TARGET_ENV == "CONTOSO_GOLD_TARGET"
+    assert str(core_snap.gold_target()) == str(contoso_daily.GOLD_TARGET), (
+        "the snapshot reads its dbt artefacts from somewhere the DAG does not "
+        "write them"
+    )
+    assert snap.verdicts is core_snap.verdicts, (
+        "the script has grown its own copy of the logic the DAG runs"
+    )
 
     dag = contoso_daily.contoso_daily()
     gold = dag.get_task("gold.gold_test")
@@ -595,3 +606,98 @@ def test_the_readme_inventory_matches_the_pinned_core():
 
     ok, message = show.check(Path(__file__).resolve().parent.parent / "README.md")
     assert ok, message
+
+
+def test_the_dag_publishes_the_snapshot_and_publishes_it_last(monkeypatch):
+    """Until now this cell published nothing an unattended run could be held to.
+
+    `scripts/snapshot.py` was only ever run by hand, so every green run of this
+    DAG proved a pipeline executed and stated no figure anyone could check --
+    G50, and worse here than in the sibling cells, which at least wrote a
+    snapshot nobody read.
+
+    LAST IS PART OF THE CLAIM. `semantic_model` holds DAX to SQL on the same
+    run; publishing before that would put a number on record the run had not
+    finished checking.
+    """
+    pytest.importorskip("airflow.sdk")
+    pytest.importorskip("cosmos")
+    monkeypatch.setenv("AIRFLOW__COSMOS__ENABLE_CACHE", "False")
+    root = pathlib.Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "dags"))
+    import contoso_daily
+
+    dag = contoso_daily.contoso_daily()
+    publish = dag.get_task("publish")
+    upstream = {t.task_id for t in publish.upstream_list}
+    # provision too, because the task takes its ctx -- the same shape every
+    # ctx-taking task in this DAG has.
+    assert "semantic_model" in upstream, upstream
+    assert not publish.downstream_list, "something runs after the numbers are published"
+
+
+def test_the_snapshot_goes_where_the_platform_says(monkeypatch):
+    """The platform owns deployment facts; the product asks.
+
+    A product that derived this from its own __file__ is how the sibling cell
+    ended up writing into site-packages.
+    """
+    from contoso_airflow import snapshot as snap
+
+    monkeypatch.setenv(snap.SNAPSHOT_ENV, "/opt/somewhere/product_snapshot.json")
+    assert str(snap.out_path()) == "/opt/somewhere/product_snapshot.json"
+    monkeypatch.delenv(snap.SNAPSHOT_ENV)
+    assert str(snap.out_path()) == "product_snapshot.json"
+
+
+def test_build_reports_the_three_aggregates_and_the_contracts_the_run_ran(tmp_path):
+    """`build` without a warehouse, a stack or a credential.
+
+    The three keys are the family's, and `compare_products` refuses a snapshot
+    that carries none of them -- so a shape change here is a cell dropping out
+    of the comparison, which is worth a test that needs no Docker.
+    """
+    from contoso_airflow import snapshot as snap
+
+    (tmp_path / "run_results.json").write_text(json.dumps({
+        "args": {"which": "test"},
+        "results": [{"unique_id": "test.contoso_gold.revenue_summary_loses_no_revenue",
+                     "status": "pass"}],
+    }), encoding="utf-8")
+
+    class _Cursor:
+        def execute(self, sql):
+            assert "fct_revenue_summary" in sql
+            return self
+
+        def fetchone(self):
+            return ("129341157.6700", "2800504.4000", "474044")
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+    import contoso_product
+
+    def one_contract():
+        return tmp_path
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "revenue_summary_loses_no_revenue.sql").write_text("select 1")
+    original = contoso_product.gold_dir
+    contoso_product.gold_dir = one_contract
+    try:
+        snapshot = snap.build(_Conn(), "wh-1234", results=tmp_path)
+    finally:
+        contoso_product.gold_dir = original
+
+    assert snapshot["revenue_usd"] == "129341157.6700"
+    assert snapshot["cancelled_revenue_usd"] == "2800504.4000"
+    assert snapshot["sale_lines"] == "474044"
+    assert snapshot["contracts"] == ["revenue_summary_loses_no_revenue"]
+    assert snapshot["catalog"] == "wh-1234"
+    # ABSENT WHEN CLEAN, never `[]` -- compare_products reads the distinction.
+    assert "contract_failures" not in snapshot
+
+    out = snap.write(snapshot, tmp_path / "out" / "product_snapshot.json")
+    assert json.loads(out.read_text(encoding="utf-8")) == snapshot
